@@ -14,12 +14,12 @@ export type PlannedPaycheck = {
 };
 
 export type PaycheckPlan = {
-  netAmount: number;
-  paydays: readonly string[];
-  rothContribution: number;
-  billsAllocation: number;
-  weeklySpendingAllocation: number;
-  cushion: number;
+  netAmount?: number;
+  paydays?: readonly string[];
+  rothContribution?: number;
+  billsAllocation?: number;
+  weeklySpendingAllocation?: number;
+  cushion?: number;
 };
 
 export type RothContributionPlan = {
@@ -33,26 +33,26 @@ export type RothContributionPlan = {
 };
 
 export type BillsPlan = {
-  destination: string;
+  destination?: string;
   reservePurpose: "bills-cash-reserve";
-  intendedApy: number;
+  intendedApy?: number;
   monthlyObligations: {
-    rent: number;
-    utilities: number;
-    phone: number;
-    total: number;
+    rent?: number;
+    utilities?: number;
+    phone?: number;
+    total?: number;
   };
-  period: {
+  period?: {
     start: string;
     end: string;
     totalRequired: number;
   };
-  perPaycheckAllocation: number;
+  perPaycheckAllocation?: number;
 };
 
 export type WeeklySpendingPlan = {
-  weeklyTarget: number;
-  dailyTarget: number;
+  weeklyTarget?: number;
+  dailyTarget?: number;
   periodStartDay: "Friday";
   periodEndDay: "Thursday";
   includes: readonly ["subscriptions", "credit-card-purchases"];
@@ -61,9 +61,9 @@ export type WeeklySpendingPlan = {
 };
 
 export type FinancialPlan = {
-  currency: "USD";
+  currency: string;
   paychecks: PaycheckPlan;
-  roth: RothContributionPlan;
+  roth?: RothContributionPlan;
   bills: BillsPlan;
   weeklySpending: WeeklySpendingPlan;
 };
@@ -81,77 +81,25 @@ export type SpendingPeriod = {
   end: string;
 };
 
-const NET_PAYCHECK = 1900;
-const ROTH_PER_PAYCHECK = 500;
-const BILLS_PER_PAYCHECK = 385;
-const WEEKLY_SPENDING_TARGET = 420;
-const PAYCHECK_SPENDING_ALLOCATION = WEEKLY_SPENDING_TARGET * 2;
-const PAYCHECK_CUSHION = 175;
+import { STARTER_FINANCIAL_PROFILE, LEGACY_EXAMPLE_FINANCIAL_PROFILE, FinancialProfile } from "./financialProfileDefaults";
 
-const PAYDAYS = [
-  "2026-10-02",
-  "2026-10-16",
-  "2026-10-30",
-  "2026-11-13",
-  "2026-11-27",
-  "2026-12-11",
-  "2026-12-25",
-] as const;
-
-const ROTH_CONTRIBUTIONS = [
-  { date: "2026-10-02", amount: 500 },
-  { date: "2026-10-16", amount: 500 },
-  { date: "2026-10-30", amount: 500 },
-  { date: "2026-11-13", amount: 500 },
-  { date: "2026-11-27", amount: 500 },
-  { date: "2026-12-11", amount: 500 },
-  { date: "2026-12-25", amount: 260, mayExecuteOnNextTradingDay: true },
-] as const;
-
-const MONTHLY_OBLIGATIONS = {
-  rent: 733,
-  utilities: 100,
-  phone: 65,
-  total: 898,
-} as const;
-
-export const FINANCIAL_PLAN: FinancialPlan = {
-  currency: "USD",
-  paychecks: {
-    netAmount: NET_PAYCHECK,
-    paydays: PAYDAYS,
-    rothContribution: ROTH_PER_PAYCHECK,
-    billsAllocation: BILLS_PER_PAYCHECK,
-    weeklySpendingAllocation: PAYCHECK_SPENDING_ALLOCATION,
-    cushion: PAYCHECK_CUSHION,
-  },
-  roth: {
-    destination: "Robinhood Roth IRA",
-    totalRemaining: 3260,
-    contributions: ROTH_CONTRIBUTIONS,
-  },
-  bills: {
-    destination: "Robinhood HYSA",
-    reservePurpose: "bills-cash-reserve",
-    intendedApy: 0.0375,
-    monthlyObligations: MONTHLY_OBLIGATIONS,
-    period: {
-      start: "2026-10-01",
-      end: "2026-12-31",
-      totalRequired: 2694,
+function legacyPlan(): FinancialPlan {
+  const profile = LEGACY_EXAMPLE_FINANCIAL_PROFILE;
+  return {
+    currency: profile.currency,
+    paychecks: profile.paychecks ?? {},
+    roth: profile.roth,
+    bills: { reservePurpose: "bills-cash-reserve", ...profile.bills },
+    weeklySpending: {
+      periodStartDay: "Friday", periodEndDay: "Thursday", includes: ["subscriptions", "credit-card-purchases"],
+      excludes: ["credit-card-payments", "transfers", "investment-activity"], venmoBalanceSemantics: "available-liquidity-offset",
+      ...profile.weeklySpending,
     },
-    perPaycheckAllocation: BILLS_PER_PAYCHECK,
-  },
-  weeklySpending: {
-    weeklyTarget: WEEKLY_SPENDING_TARGET,
-    dailyTarget: 60,
-    periodStartDay: "Friday",
-    periodEndDay: "Thursday",
-    includes: ["subscriptions", "credit-card-purchases"],
-    excludes: ["credit-card-payments", "transfers", "investment-activity"],
-    venmoBalanceSemantics: "available-liquidity-offset",
-  },
-};
+  } as FinancialPlan;
+}
+
+/** Backward-compatible explicit legacy example used by the existing dashboard. */
+export const FINANCIAL_PLAN: FinancialPlan = legacyPlan();
 
 function toUtcDate(input: DateInput): Date {
   if (input instanceof Date) {
@@ -174,28 +122,29 @@ function normalize(value: string | null | undefined): string {
   return value?.trim().toLowerCase() ?? "";
 }
 
-export function getConfiguredPaydays(): readonly string[] {
-  return FINANCIAL_PLAN.paychecks.paydays;
+export function getConfiguredPaydays(profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): readonly string[] {
+  return profile.paychecks?.paydays ?? [];
 }
 
-export function getCurrentOrNextPlannedPaycheck(input: DateInput): PlannedPaycheck | null {
+export function getCurrentOrNextPlannedPaycheck(input: DateInput, profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): PlannedPaycheck | null {
   const date = formatDate(toUtcDate(input));
-  const payday = FINANCIAL_PLAN.paychecks.paydays.find((candidate) => candidate >= date);
-  return payday ? getPlannedPaycheck(payday) : null;
+  const payday = getConfiguredPaydays(profile).find((candidate) => candidate >= date);
+  return payday ? getPlannedPaycheck(payday, profile) : null;
 }
 
-export function getPlannedPaycheck(payday: string): PlannedPaycheck {
-  if (!FINANCIAL_PLAN.paychecks.paydays.includes(payday as (typeof PAYDAYS)[number])) {
+export function getPlannedPaycheck(payday: string, profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): PlannedPaycheck {
+  if (!getConfiguredPaydays(profile).includes(payday)) {
     throw new Error(`No planned paycheck exists for ${payday}`);
   }
 
+  const values = profile.paychecks ?? {};
   return {
     date: payday,
-    netAmount: NET_PAYCHECK,
-    rothContribution: calculatePlannedRothContribution(payday),
-    billsAllocation: BILLS_PER_PAYCHECK,
-    weeklySpendingAllocation: PAYCHECK_SPENDING_ALLOCATION,
-    cushion: PAYCHECK_CUSHION,
+    netAmount: values.netAmount ?? 0,
+    rothContribution: calculatePlannedRothContribution(payday, profile),
+    billsAllocation: values.billsAllocation ?? 0,
+    weeklySpendingAllocation: values.weeklySpendingAllocation ?? 0,
+    cushion: values.cushion ?? 0,
   };
 }
 
@@ -211,25 +160,26 @@ export function getSpendingPeriod(input: DateInput): SpendingPeriod {
   return { start: formatDate(start), end: formatDate(end) };
 }
 
-export function getWeeklySpendingTarget(): number {
-  return FINANCIAL_PLAN.weeklySpending.weeklyTarget;
+export function getWeeklySpendingTarget(profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): number | undefined {
+  return profile.weeklySpending?.weeklyTarget;
 }
 
-export function getPaycheckAllocation(): PaycheckPlan {
-  return FINANCIAL_PLAN.paychecks;
+export function getPaycheckAllocation(profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): PaycheckPlan {
+  return profile.paychecks ?? {};
 }
 
-export function calculatePlannedRothContribution(payday: string): number {
-  return FINANCIAL_PLAN.roth.contributions.find((contribution) => contribution.date === payday)?.amount ?? 0;
+export function calculatePlannedRothContribution(payday: string, profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): number {
+  return profile.roth?.contributions.find((contribution) => contribution.date === payday)?.amount ?? profile.paychecks?.rothContribution ?? 0;
 }
 
-export function calculateRemainingPlannedRothContributions(asOfDate?: DateInput): number {
+export function calculateRemainingPlannedRothContributions(asOfDate?: DateInput, profile: FinancialProfile = STARTER_FINANCIAL_PROFILE): number {
+  const contributions = profile.roth?.contributions ?? [];
   if (asOfDate === undefined) {
-    return FINANCIAL_PLAN.roth.contributions.reduce((total, contribution) => total + contribution.amount, 0);
+    return contributions.reduce((total, contribution) => total + contribution.amount, 0);
   }
 
   const date = formatDate(toUtcDate(asOfDate));
-  return FINANCIAL_PLAN.roth.contributions
+  return contributions
     .filter((contribution) => contribution.date >= date)
     .reduce((total, contribution) => total + contribution.amount, 0);
 }

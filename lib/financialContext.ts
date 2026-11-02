@@ -1,4 +1,4 @@
-import { createClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import accounting from "./accounting";
 import {
   DashboardAccount,
@@ -19,10 +19,10 @@ type SourceStatus = "available" | "unavailable";
 export type FinancialContext = {
   generatedAt: string;
   netWorth: {
-    total: number;
-    cash: number;
-    creditCardDebt: number;
-    investments: number;
+    total: number | null;
+    cash: number | null;
+    creditCardDebt: number | null;
+    investments: number | null;
   };
   accounts: Array<{
     institution: string | null;
@@ -35,7 +35,7 @@ export type FinancialContext = {
     isInvestment: boolean;
   }>;
   investments: {
-    totalValue: number;
+    totalValue: number | null;
     holdings: Array<{
       ticker: string | null;
       name: string | null;
@@ -79,11 +79,6 @@ export type FinancialContext = {
   };
 };
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
 function currentMonthRange() {
   const now = new Date();
   return {
@@ -97,6 +92,7 @@ function sourceStatus(error: unknown): SourceStatus {
 }
 
 export async function getFinancialContext(
+  supabase: SupabaseClient,
   userId: string,
   options: FinancialContextOptions = {}
 ): Promise<FinancialContext> {
@@ -125,20 +121,11 @@ export async function getFinancialContext(
     .select("id, plaid_account_id, security_id, ticker_symbol, security_name, quantity, institution_price, institution_value, cost_basis")
     .eq("user_id", userId)
     .order("institution_value", { ascending: false });
-  const freshnessQuery = supabase
-    .from("plaid_items")
-    .select("updated_at")
-    .eq("user_id", userId)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const [accountsResult, monthlyTransactionsResult, recentTransactionsResult, holdingsResult, freshnessResult] = await Promise.all([
+  const [accountsResult, monthlyTransactionsResult, recentTransactionsResult, holdingsResult] = await Promise.all([
     accountsQuery,
     monthlyTransactionsQuery,
     recentTransactionsQuery,
     holdingsQuery,
-    freshnessQuery,
   ]);
 
   if (accountsResult.error || monthlyTransactionsResult.error || recentTransactionsResult.error || holdingsResult.error) {
@@ -206,13 +193,14 @@ export async function getFinancialContext(
       barclaysPoints: rewardBalances.find((reward) => reward.label === "Barclays Points")?.value ?? null,
     },
     freshness: {
-      lastRefreshAt: freshnessResult.error ? null : freshnessResult.data?.updated_at ?? null,
+      lastRefreshAt: null,
       sourceStatuses: {
         accounts: sourceStatus(accountsResult.error),
         monthlyTransactions: sourceStatus(monthlyTransactionsResult.error),
         recentTransactions: sourceStatus(recentTransactionsResult.error),
         investments: sourceStatus(holdingsResult.error),
-        plaid: sourceStatus(freshnessResult.error),
+        // plaid_items intentionally has no user-facing RLS policy.
+        plaid: "unavailable",
       },
     },
   };

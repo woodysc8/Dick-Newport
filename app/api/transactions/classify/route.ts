@@ -1,17 +1,15 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import classifyTransaction from "../../../../lib/classifyTransaction";
+import { getAuthenticatedSupabaseContext } from "../../../../lib/supabase/server";
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-
-const FIXED_USER_ID = "4ac12929-b795-474e-9001-56190c6c4daf";
-
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = await getAuthenticatedSupabaseContext(request);
+  if (!auth) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   try {
-    const { data: txs, error } = await supabase
+    const { data: txs, error } = await auth.supabase
       .from("transactions")
       .select("id, date, name, merchant_name, amount, category, pending, plaid_transaction_id")
-      .eq("user_id", FIXED_USER_ID)
+      .eq("user_id", auth.user.id)
       .order("date", { ascending: false })
       .limit(1000);
 

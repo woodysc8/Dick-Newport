@@ -353,12 +353,14 @@ export function classifyTransaction(
   // ---------------------------------------------------------------------------
 
   if (
-    merchantContains(PAYROLL_KEYWORDS) ||
-    category.includes("payroll") ||
-    category.includes("salary") ||
-    name.includes("check deposit") ||
-    name.includes("paycheck") ||
-    name.includes("salary")
+    amount < 0 && (
+      merchantContains(PAYROLL_KEYWORDS) ||
+      category.includes("payroll") ||
+      category.includes("salary") ||
+      name.includes("check deposit") ||
+      name.includes("paycheck") ||
+      name.includes("salary")
+    )
   ) {
     return buildResult(
       "income",

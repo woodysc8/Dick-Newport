@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import accounting from "../../../../lib/accounting";
 import classifyTransaction from "../../../../lib/classifyTransaction";
+import { getAuthenticatedSupabaseContext } from "../../../../lib/supabase/server";
 
-const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-
-const FIXED_USER_ID = "4ac12929-b795-474e-9001-56190c6c4daf";
-
-export async function GET() {
+export async function GET(request: Request) {
+  const auth = await getAuthenticatedSupabaseContext(request);
+  if (!auth) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   try {
     // month range same as dashboard
     const now = new Date();
@@ -17,10 +15,10 @@ export async function GET() {
     const monthEnd = new Date(year, month + 1, 0).toISOString().slice(0, 10);
 
     // fetch accounts
-    const { data: accounts, error: accErr } = await supabase
+    const { data: accounts, error: accErr } = await auth.supabase
       .from("accounts")
       .select("id, institution_name, account_name, account_type, account_subtype, current_balance, available_balance, plaid_account_id, mask")
-      .eq("user_id", FIXED_USER_ID)
+      .eq("user_id", auth.user.id)
       .order("created_at", { ascending: false });
 
     if (accErr) {
@@ -29,10 +27,10 @@ export async function GET() {
     }
 
     // fetch transactions for the month
-    const { data: transactions, error: txErr } = await supabase
+    const { data: transactions, error: txErr } = await auth.supabase
       .from("transactions")
       .select("id, date, name, merchant_name, amount, category, pending, plaid_transaction_id, account_id")
-      .eq("user_id", FIXED_USER_ID)
+      .eq("user_id", auth.user.id)
       .gte("date", monthStart)
       .lte("date", monthEnd)
       .order("date", { ascending: false });

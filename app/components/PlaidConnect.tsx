@@ -28,14 +28,19 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
   const router = useRouter();
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [investmentUpdateLinkToken, setInvestmentUpdateLinkToken] = useState<string | null>(null);
+  const [biltRepairLinkToken, setBiltRepairLinkToken] = useState<string | null>(null);
   const [linkStatus, setLinkStatus] = useState("");
   const [refreshStatus, setRefreshStatus] = useState("");
   const [refreshError, setRefreshError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [investmentConsentStatus, setInvestmentConsentStatus] = useState("");
   const [investmentConsentError, setInvestmentConsentError] = useState<string | null>(null);
+  const [biltRepairStatus, setBiltRepairStatus] = useState("");
+  const [biltRepairError, setBiltRepairError] = useState<string | null>(null);
+  const [isPreparingBiltRepair, setIsPreparingBiltRepair] = useState(false);
   const [isPreparingInvestmentConsent, setIsPreparingInvestmentConsent] = useState(false);
   const [shouldOpenInvestmentUpdate, setShouldOpenInvestmentUpdate] = useState(false);
+  const [shouldOpenBiltRepair, setShouldOpenBiltRepair] = useState(false);
 
   const refreshFinancialData = useCallback(async () => {
     if (isRefreshing) return false;
@@ -109,6 +114,27 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
     }
   };
 
+  const createBiltRepairLinkToken = async () => {
+    if (isPreparingBiltRepair || biltRepairLinkToken || isRefreshing) return;
+    setIsPreparingBiltRepair(true);
+    setBiltRepairStatus("Preparing Bilt repair...");
+    setBiltRepairError(null);
+    try {
+      const response = await fetch("/api/plaid/create-bilt-repair-link-token", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to prepare Bilt repair");
+      setBiltRepairLinkToken(data.link_token);
+      setShouldOpenBiltRepair(true);
+      setBiltRepairStatus("Opening Plaid to repair the existing Bilt connection...");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setBiltRepairStatus("");
+      setBiltRepairError(message);
+    } finally {
+      setIsPreparingBiltRepair(false);
+    }
+  };
+
   const onSuccess = useCallback(async (publicToken: string | null) => {
     if (!publicToken) {
       setLinkStatus("Plaid did not return a public token.");
@@ -145,11 +171,38 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
     }
   }, [refreshFinancialData]);
 
+  const onBiltRepairSuccess = useCallback(async () => {
+    setBiltRepairStatus("Bilt connection repaired. Refreshing financial data...");
+    setBiltRepairError(null);
+    const refreshed = await refreshFinancialData();
+    if (refreshed) {
+      setBiltRepairStatus("Bilt connection repaired and financial data refreshed.");
+      setBiltRepairLinkToken(null);
+    } else {
+      setBiltRepairError("Bilt repair completed, but the financial refresh did not succeed.");
+    }
+  }, [refreshFinancialData]);
+
+  const onBiltRepairExit = useCallback((error: { error_message?: string } | null) => {
+    setShouldOpenBiltRepair(false);
+    setBiltRepairLinkToken(null);
+    if (error?.error_message) {
+      setBiltRepairStatus("");
+      setBiltRepairError(error.error_message);
+    } else {
+      setBiltRepairStatus("Bilt repair was canceled.");
+    }
+  }, []);
+
   const { open, ready } = usePlaidLink({ token: linkToken, onSuccess });
   const {
     open: openInvestmentUpdate,
     ready: investmentUpdateReady,
   } = usePlaidLink({ token: investmentUpdateLinkToken, onSuccess: onInvestmentUpdateSuccess });
+  const {
+    open: openBiltRepair,
+    ready: biltRepairReady,
+  } = usePlaidLink({ token: biltRepairLinkToken, onSuccess: onBiltRepairSuccess, onExit: onBiltRepairExit });
 
   useEffect(() => {
     if (shouldOpenInvestmentUpdate && investmentUpdateLinkToken && investmentUpdateReady) {
@@ -157,6 +210,13 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
       openInvestmentUpdate();
     }
   }, [investmentUpdateLinkToken, investmentUpdateReady, openInvestmentUpdate, shouldOpenInvestmentUpdate]);
+
+  useEffect(() => {
+    if (shouldOpenBiltRepair && biltRepairLinkToken && biltRepairReady) {
+      setShouldOpenBiltRepair(false);
+      openBiltRepair();
+    }
+  }, [biltRepairLinkToken, biltRepairReady, openBiltRepair, shouldOpenBiltRepair]);
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -169,6 +229,9 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
             {isPreparingInvestmentConsent ? "Preparing..." : "Enable Investment Holdings"}
           </button>
         )}
+        <button onClick={createBiltRepairLinkToken} disabled={isPreparingBiltRepair || isRefreshing || Boolean(biltRepairLinkToken)} className="rounded-lg border border-emerald-600 px-4 py-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">
+          {isPreparingBiltRepair ? "Preparing..." : "Repair Bilt Connection"}
+        </button>
         {!linkToken ? (
           <button onClick={createLinkToken} className="rounded-lg bg-black px-5 py-3 text-white">Connect a Bank Account</button>
         ) : (
@@ -180,6 +243,8 @@ export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProp
       {refreshError && <p className="max-w-md text-right text-sm text-red-600">Refresh error: {refreshError}</p>}
       {investmentConsentStatus && <p className="text-right text-sm text-emerald-700">{investmentConsentStatus}</p>}
       {investmentConsentError && <p className="max-w-md text-right text-sm text-red-600">Investment consent error: {investmentConsentError}</p>}
+      {biltRepairStatus && <p className="text-right text-sm text-emerald-700">{biltRepairStatus}</p>}
+      {biltRepairError && <p className="max-w-md text-right text-sm text-red-600">Bilt repair error: {biltRepairError}</p>}
     </div>
   );
 }

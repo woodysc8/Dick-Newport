@@ -32,8 +32,9 @@ export function isDashboardInvestmentAccount(account: DashboardAccount): boolean
 
 export interface InvestmentHolding {
   id: string;
-  plaid_account_id: string;
-  security_id: string;
+  plaid_item_id?: string | null;
+  plaid_account_id: string | null;
+  security_id: string | null;
   ticker_symbol: string | null;
   security_name: string | null;
   quantity: number | string | null;

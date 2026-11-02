@@ -42,11 +42,12 @@ export interface MonthlyAccounting {
 }
 
 export interface AccountSummary {
-  cash: number;
-  investments: number;
-  crypto: number;
-  credit: number;
-  netWorth: number;
+  configured: boolean;
+  cash: number | null;
+  investments: number | null;
+  crypto: number | null;
+  credit: number | null;
+  netWorth: number | null;
 }
 
 export interface DashboardBudgetCategoryTotal {
@@ -569,16 +570,19 @@ function getBudgetCategory(
 export function summarizeAccounts(
   accounts: any[]
 ): AccountSummary {
-  let cash = 0;
-  let investments = 0;
-  let crypto = 0;
-  let credit = 0;
+  const configured = (accounts?.length ?? 0) > 0;
+  let supported = false;
+  const totals = {
+    cash: { amount: 0, unknown: false },
+    investments: { amount: 0, unknown: false },
+    crypto: { amount: 0, unknown: false },
+    credit: { amount: 0, unknown: false },
+  };
 
   for (const account of accounts ?? []) {
-    const balance =
-      toNumber(
-        account?.current_balance
-      );
+    const rawBalance = account?.current_balance;
+    const parsedBalance = rawBalance == null || rawBalance === "" ? null : Number(rawBalance);
+    const balance = parsedBalance != null && Number.isFinite(parsedBalance) ? parsedBalance : null;
 
     const accountType =
       normalize(
@@ -594,6 +598,10 @@ export function summarizeAccounts(
       accountType === "credit" ||
       subtype.includes("credit");
 
+    const isLoan =
+      accountType === "loan" ||
+      subtype.includes("loan");
+
     const isCrypto =
       accountType === "crypto" ||
       subtype.includes("crypto");
@@ -608,29 +616,37 @@ export function summarizeAccounts(
       subtype.includes("retirement") ||
       subtype.includes("pension");
 
-    if (isCredit) {
-      credit += balance;
-    } else if (isCrypto) {
-      crypto += balance;
-    } else if (isInvestment) {
-      investments += balance;
-    } else if (
-      accountType === "depository"
-    ) {
-      cash += balance;
-    }
+    const bucket = isCredit || isLoan ? totals.credit
+      : isCrypto ? totals.crypto
+        : isInvestment ? totals.investments
+          : accountType === "depository" ? totals.cash
+            : null;
+    if (!bucket) continue;
+    supported = true;
+    // Plaid current_balance is positive for credit-card debt and negative
+    // for a credit balance. Loan balances are liabilities and cannot use
+    // the credit-card sign convention.
+    if (balance == null || (isLoan && balance < 0)) bucket.unknown = true;
+    else bucket.amount += balance;
   }
 
+  const cash = totals.cash.unknown ? null : totals.cash.amount;
+  const investments = totals.investments.unknown ? null : totals.investments.amount;
+  const crypto = totals.crypto.unknown ? null : totals.crypto.amount;
+  const credit = totals.credit.unknown ? null : totals.credit.amount;
+  const netWorth = !configured || !supported || [cash, investments, crypto, credit].some((value) => value == null)
+    ? null
+    // Credit account balances represent amounts owed: display the bucket as a
+    // positive debt amount, but subtract it from net worth.
+    : cash! + investments! + crypto! - credit!;
+
   return {
+    configured,
     cash,
     investments,
     crypto,
     credit,
-    netWorth:
-      cash +
-      investments +
-      crypto +
-      credit,
+    netWorth,
   };
 }
 
@@ -642,7 +658,8 @@ export function summarizeAccounts(
 
 export function computeMonthlyAccounting(
   transactions: any[],
-  _accounts?: any[]
+  _accounts?: any[],
+  options: { includePending?: boolean } = {}
 ): MonthlyAccounting {
   let income = 0;
   let grossSpending = 0;
@@ -655,8 +672,20 @@ export function computeMonthlyAccounting(
 
   const spendingMap =
     new Map<string, number>();
+  const seenTransactionIds = new Set<string>();
 
   for (const tx of transactions ?? []) {
+    const providerId = typeof tx?.plaid_transaction_id === "string"
+      ? tx.plaid_transaction_id.trim()
+      : "";
+    if (providerId) {
+      if (seenTransactionIds.has(providerId)) continue;
+      seenTransactionIds.add(providerId);
+    }
+
+    // Preserve the historical behavior unless a profile explicitly opts out.
+    if (tx?.pending && options.includePending === false) continue;
+
     const amount =
       toNumber(tx?.amount);
 
@@ -691,7 +720,9 @@ export function computeMonthlyAccounting(
      * --------------------------------------------------------
      */
 
-    if (isIncome(tx)) {
+    // In this application's Plaid amount convention, income is an inflow
+    // (negative amount). A payroll-like debit must never become income.
+    if (amount < 0 && isIncome(tx)) {
       income += Math.abs(amount);
       continue;
     }
@@ -727,7 +758,29 @@ export function computeMonthlyAccounting(
      */
 
     if (isRefund(tx)) {
-      refunds += Math.abs(amount);
+      if (amount < 0) {
+        const refund = Math.abs(amount);
+        refunds += refund;
+        spending -= refund;
+
+        const budgetCategory = getBudgetCategory(tx);
+        if (budgetCategory) {
+          spendingMap.set(
+            budgetCategory,
+            (spendingMap.get(budgetCategory) ?? 0) - refund
+          );
+        }
+      } else {
+        // A positive Plaid amount is money leaving the account. For an
+        // explicitly labeled refund reversal, retain it as an outflow.
+        grossSpending += amount;
+        spending += amount;
+        if (tx?.pending) pendingSpending += amount;
+        const budgetCategory = getBudgetCategory(tx);
+        if (budgetCategory) {
+          spendingMap.set(budgetCategory, (spendingMap.get(budgetCategory) ?? 0) + amount);
+        }
+      }
       continue;
     }
 

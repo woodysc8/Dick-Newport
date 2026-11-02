@@ -1,6 +1,7 @@
 import { isIncomingVenmoDiningReimbursement } from "./accounting";
 import { classifyTransaction, FinancialType } from "./classifyTransaction";
 import { getSpendingPeriod, getWeeklySpendingTarget, DateInput } from "./financialPlan";
+import { FinancialProfile, STARTER_FINANCIAL_PROFILE } from "./financialProfileDefaults";
 
 export type WeeklySpendingTransaction = {
   date: string;
@@ -14,13 +15,13 @@ export type WeeklySpendingTransaction = {
 export type WeeklySpendingResult = {
   periodStart: string;
   periodEnd: string;
-  target: number;
-  dailyTarget: number;
+  target: number | null;
+  dailyTarget: number | null;
   eligibleSpending: number;
-  remainingBudget: number;
+  remainingBudget: number | null;
   venmoBalance: number;
-  remainingFundingNeed: number;
-  spendingPercentage: number;
+  remainingFundingNeed: number | null;
+  spendingPercentage: number | null;
   transactionCount: number;
 };
 
@@ -28,6 +29,7 @@ export type WeeklySpendingOptions = {
   asOf: DateInput;
   transactions: readonly WeeklySpendingTransaction[];
   venmoBalance: number;
+  profile?: FinancialProfile;
 };
 
 function amountOf(transaction: WeeklySpendingTransaction): number {
@@ -49,13 +51,16 @@ function amountForEligibleSpending(
   return includesSpending && amount > 0 ? amount : 0;
 }
 
-export function calculateWeeklySpending({ asOf, transactions, venmoBalance }: WeeklySpendingOptions): WeeklySpendingResult {
+export function calculateWeeklySpending({ asOf, transactions, venmoBalance, profile = STARTER_FINANCIAL_PROFILE }: WeeklySpendingOptions): WeeklySpendingResult {
   const period = getSpendingPeriod(asOf);
   let eligibleSpending = 0;
   let transactionCount = 0;
 
   for (const transaction of transactions) {
     if (transaction.date < period.start || transaction.date > period.end) {
+      continue;
+    }
+    if (transaction.pending && profile.budgetingPreferences?.includePendingTransactions === false) {
       continue;
     }
 
@@ -79,21 +84,21 @@ export function calculateWeeklySpending({ asOf, transactions, venmoBalance }: We
   }
 
   eligibleSpending = Math.max(0, eligibleSpending);
-  const target = getWeeklySpendingTarget();
-  const remainingBudget = Math.max(0, target - eligibleSpending);
+  const target = getWeeklySpendingTarget(profile) ?? null;
+  const remainingBudget = target == null ? null : Math.max(0, target - eligibleSpending);
   const availableVenmo = Math.max(0, Number.isFinite(venmoBalance) ? venmoBalance : 0);
-  const remainingFundingNeed = Math.max(0, remainingBudget - availableVenmo);
+  const remainingFundingNeed = remainingBudget == null ? null : Math.max(0, remainingBudget - availableVenmo);
 
   return {
     periodStart: period.start,
     periodEnd: period.end,
     target,
-    dailyTarget: 60,
+    dailyTarget: profile.weeklySpending?.dailyTarget ?? (target == null ? null : target / 7),
     eligibleSpending,
     remainingBudget,
     venmoBalance: availableVenmo,
     remainingFundingNeed,
-    spendingPercentage: target > 0 ? (eligibleSpending / target) * 100 : 0,
+    spendingPercentage: target == null ? null : target > 0 ? (eligibleSpending / target) * 100 : 0,
     transactionCount,
   };
 }

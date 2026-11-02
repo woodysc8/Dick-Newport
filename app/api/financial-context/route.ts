@@ -1,14 +1,8 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextRequest, NextResponse } from "next/server";
 import { FinancialContext, getFinancialContext } from "../../../lib/financialContext";
+import { getAuthenticatedSupabaseContext } from "../../../lib/supabase/server";
 
 export const dynamic = "force-dynamic";
-
-const authClient = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!
-);
-const FIXED_USER_ID = "4ac12929-b795-474e-9001-56190c6c4daf";
 
 const VALID_SCOPES = ["networth", "accounts", "investments", "monthly", "transactions", "rewards", "freshness"] as const;
 type FinancialContextScope = (typeof VALID_SCOPES)[number];
@@ -46,19 +40,8 @@ function scopedContext(context: FinancialContext, scopes: FinancialContextScope[
 }
 
 export async function GET(request: NextRequest) {
-  const authorization = request.headers.get("authorization");
-  const token = authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
-
-  if (!token) {
-    return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-  }
-
-  // Existing server-to-server routes use the service role for this single-user app.
-  // Keep it server-only while allowing the MCP adapter to call this same API.
-  const userId = token === process.env.SUPABASE_SERVICE_ROLE_KEY
-    ? FIXED_USER_ID
-    : (await authClient.auth.getUser(token)).data.user?.id;
-  if (!userId) return NextResponse.json({ error: "Invalid authentication token" }, { status: 401 });
+  const auth = await getAuthenticatedSupabaseContext(request);
+  if (!auth) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
 
   const scopes = parseScopes(request.nextUrl.searchParams.get("scope"));
   if (scopes?.length === 0) {
@@ -73,7 +56,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const includeSnapshots = request.nextUrl.searchParams.get("includeSnapshots") === "true";
-    const context = await getFinancialContext(userId, { includeSnapshots, transactionLimit });
+    const context = await getFinancialContext(auth.supabase, auth.user.id, { includeSnapshots, transactionLimit });
     return NextResponse.json(scopedContext(context, scopes));
   } catch (error) {
     console.error("Financial context request failed", error);

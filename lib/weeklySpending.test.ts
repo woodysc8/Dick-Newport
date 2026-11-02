@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { calculateWeeklySpending, WeeklySpendingTransaction } from "./weeklySpending";
+import { LEGACY_EXAMPLE_FINANCIAL_PROFILE, STARTER_FINANCIAL_PROFILE } from "./financialProfileDefaults";
 
 function transaction(overrides: Partial<WeeklySpendingTransaction> = {}): WeeklySpendingTransaction {
   return {
@@ -17,10 +18,19 @@ function calculate(transactions: readonly WeeklySpendingTransaction[], venmoBala
     asOf: "2026-10-08",
     transactions,
     venmoBalance,
+    profile: LEGACY_EXAMPLE_FINANCIAL_PROFILE,
   });
 }
 
 describe("calculateWeeklySpending", () => {
+  it("keeps an unset target and dependent totals unknown for a new profile", () => {
+    const result = calculateWeeklySpending({ asOf: "2026-10-08", transactions: [], venmoBalance: 0, profile: STARTER_FINANCIAL_PROFILE });
+    expect(result.target).toBeNull();
+    expect(result.remainingBudget).toBeNull();
+    expect(result.remainingFundingNeed).toBeNull();
+    expect(result.spendingPercentage).toBeNull();
+  });
+
   it("separates the remaining budget from the Venmo funding offset", () => {
     const result = calculate([transaction()], 100);
 
@@ -88,5 +98,19 @@ describe("calculateWeeklySpending", () => {
     ]);
 
     expect(result.eligibleSpending).toBe(225);
+  });
+
+  it("honors a profile preference to exclude pending transactions", () => {
+    const transactions = [
+      transaction({ amount: 25, pending: false }),
+      transaction({ amount: 40, pending: true }),
+    ];
+    const includeByDefault = calculateWeeklySpending({ asOf: "2026-10-08", transactions, venmoBalance: 0, profile: STARTER_FINANCIAL_PROFILE });
+    const excludePending = calculateWeeklySpending({
+      asOf: "2026-10-08", transactions, venmoBalance: 0,
+      profile: { ...STARTER_FINANCIAL_PROFILE, budgetingPreferences: { includePendingTransactions: false } },
+    });
+    expect(includeByDefault.eligibleSpending).toBe(65);
+    expect(excludePending.eligibleSpending).toBe(25);
   });
 });

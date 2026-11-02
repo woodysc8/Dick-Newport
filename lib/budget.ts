@@ -34,73 +34,16 @@ export interface MonthlyBudget {
   year: number;
   month: number;
   lines: BudgetLine[];
+  incomeConfigured: boolean;
+  expensesConfigured: boolean;
+  savingsConfigured: boolean;
 }
 
-/*
- * ============================================================
- * MONTHLY BUDGET
- * ============================================================
- *
- * Current monthly plan:
- *
- * Housing & Bills       $985
- * Food                  $900
- * Transportation        $260
- * Fun & Entertainment     $0
- * Shopping & Personal   $200
- * Health                $175
- *
- * Total expenses      $2,520
- *
- * Income target       $4,240
- *
- * Savings target      $1,720
- *
- * $4,240 - $2,520 = $1,720
- * ============================================================
- */
-
-const MONTHLY_INCOME = 4240;
-
-const MONTHLY_EXPENSES = [
-  {
-    name: "Housing & Bills",
-    category: "housing_bills",
-    amount: 985,
-  },
-  {
-    name: "Food",
-    category: "food",
-    amount: 900,
-  },
-  {
-    name: "Transportation",
-    category: "transportation",
-    amount: 260,
-  },
-  {
-    name: "Fun & Entertainment",
-    category: "fun_entertainment",
-    amount: 0,
-  },
-  {
-    name: "Shopping & Personal",
-    category: "shopping_personal",
-    amount: 200,
-  },
-  {
-    name: "Health",
-    category: "health",
-    amount: 175,
-  },
-];
-
-const MONTHLY_SAVINGS =
-  MONTHLY_INCOME -
-  MONTHLY_EXPENSES.reduce(
-    (total, line) => total + line.amount,
-    0
-  );
+export interface BudgetConfiguration {
+  monthlyIncome?: number;
+  monthlySpendingTarget?: number;
+  expenses?: readonly { name: string; category: string; amount: number }[];
+}
 
 /*
  * ============================================================
@@ -110,12 +53,21 @@ const MONTHLY_SAVINGS =
 
 export function getMonthlyBudget(
   year: number,
-  month: number
+  month: number,
+  configuration: BudgetConfiguration = {},
 ): MonthlyBudget {
+  const income = configuration.monthlyIncome;
+  const expenses = configuration.expenses ?? [];
+  const incomeConfigured = income !== undefined;
+  const expensesConfigured = configuration.expenses !== undefined;
+  const savingsConfigured = incomeConfigured && expensesConfigured;
+  const savings = savingsConfigured ? income - expenses.reduce((total, line) => total + line.amount, 0) : undefined;
   return {
     year,
     month,
-
+    incomeConfigured,
+    expensesConfigured,
+    savingsConfigured,
     lines: [
       /*
        * --------------------------------------------------------
@@ -123,13 +75,13 @@ export function getMonthlyBudget(
        * --------------------------------------------------------
        */
 
-      {
+      ...(incomeConfigured ? [{
         name: "Monthly Income",
         category: "income",
-        amount: MONTHLY_INCOME,
+        amount: income!,
         isIncome: true,
         isSavings: false,
-      },
+      }] : []),
 
       /*
        * --------------------------------------------------------
@@ -137,13 +89,13 @@ export function getMonthlyBudget(
        * --------------------------------------------------------
        */
 
-      ...MONTHLY_EXPENSES.map((line) => ({
+      ...(expensesConfigured ? expenses.map((line) => ({
         name: line.name,
         category: line.category,
         amount: line.amount,
         isIncome: false,
         isSavings: false,
-      })),
+      })) : []),
 
       /*
        * --------------------------------------------------------
@@ -151,13 +103,13 @@ export function getMonthlyBudget(
        * --------------------------------------------------------
        */
 
-      {
+      ...(savingsConfigured ? [{
         name: "Savings",
         category: "savings",
-        amount: MONTHLY_SAVINGS,
+        amount: savings!,
         isIncome: false,
         isSavings: true,
-      },
+      }] : []),
     ],
   };
 }
@@ -170,7 +122,8 @@ export function getMonthlyBudget(
 
 export function getBudgetedIncome(
   budget: MonthlyBudget
-): number {
+): number | null {
+  if (!budget.incomeConfigured) return null;
   return budget.lines
     .filter((line) => line.isIncome)
     .reduce(
@@ -187,7 +140,8 @@ export function getBudgetedIncome(
 
 export function getBudgetedExpenses(
   budget: MonthlyBudget
-): number {
+): number | null {
+  if (!budget.expensesConfigured) return null;
   return budget.lines
     .filter(
       (line) =>
@@ -208,7 +162,8 @@ export function getBudgetedExpenses(
 
 export function getBudgetedSavings(
   budget: MonthlyBudget
-): number {
+): number | null {
+  if (!budget.savingsConfigured) return null;
   return budget.lines
     .filter((line) => line.isSavings)
     .reduce(

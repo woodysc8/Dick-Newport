@@ -9,19 +9,18 @@ import {
   getDashboardAccountClass,
 } from "./dashboard";
 import {
-  FINANCIAL_PLAN,
+  BillsPlan,
   getCurrentOrNextPlannedPaycheck,
   getPaycheckAllocation,
 } from "./financialPlan";
+import { STARTER_FINANCIAL_PROFILE } from "./financialProfileDefaults";
+import type { FinancialProfile } from "./financialProfileDefaults";
 import { calculateWeeklySpending, WeeklySpendingResult } from "./weeklySpending";
 import { isCashEquivalentAsset } from "./investmentSnapshots";
-
-export const DASHBOARD_TARGETS = {
-  projectedMonthlyIncome: 4300,
-  monthlySpendingGoal: 2520,
-  monthlySavingsGoal: 1780,
-  spendingRedThreshold: 8000,
-} as const;
+import { estimateMonthlyBudgetIncome, MonthlyIncomeEstimate } from "./monthlyIncomeEstimate";
+import { estimateMonthlyRecurringExpenses, MonthlyExpenseEstimate } from "./monthlyExpenseEstimate";
+import { ProfileAccountBalanceSummary, summarizeProfileAccountBalances } from "./profileAccountBalances";
+import { normalizeFinancialProfile } from "./financialProfileNormalization";
 
 export type AccountWithClass = DashboardAccount & { accountClass: DashboardAccountClass };
 
@@ -55,17 +54,21 @@ export type PortfolioGrowthSeries = {
 
 export type DashboardViewModel = {
   accountSummary: ReturnType<typeof accounting.summarizeAccounts>;
+  connectedAccountSummary: ReturnType<typeof accounting.summarizeAccounts>;
+  profileAccountBalances: ProfileAccountBalanceSummary;
   monthly: MonthlyAccounting;
+  monthlyIncomeEstimate: MonthlyIncomeEstimate;
+  monthlyExpenseEstimate: MonthlyExpenseEstimate;
   budgetLines: DashboardBudgetCategoryTotal[];
   accounts: AccountWithClass[];
   cashAccounts: AccountWithClass[];
   creditAccounts: AccountWithClass[];
   taxableInvestmentAccounts: AccountWithClass[];
   retirementAccounts: AccountWithClass[];
-  retirementAssets: number;
+  retirementAssets: number | null;
   netCashFlow: number | null;
   savingsRate: number | null;
-  spendingBudgetUsage: number;
+  spendingBudgetUsage: number | null;
   projectedMonthEndSpending: number | null;
   monthlyHistory: Array<{ label: string; income: number; spending: number }>;
   investmentPerformance: {
@@ -78,7 +81,10 @@ export type DashboardViewModel = {
   };
   portfolioGrowth: PortfolioGrowthSeries;
   overallPosition: {
-    netWorth: number;
+    netWorth: number | null;
+    connectedNetWorth: number | null;
+    profileAccountNetWorth: number | null;
+    netWorthComplete: boolean;
     checkingAccounts: AccountWithClass[];
     checkingBalance: number;
   };
@@ -88,7 +94,7 @@ export type DashboardViewModel = {
     hysa: {
       accounts: AccountWithClass[];
       currentBalance: number;
-      configuredApy: number;
+      configuredApy: number | null;
     };
   };
   weeklySpending: WeeklySpendingResult;
@@ -96,8 +102,10 @@ export type DashboardViewModel = {
     paycheck: ReturnType<typeof getPaycheckAllocation>;
     nextPaycheck: ReturnType<typeof getCurrentOrNextPlannedPaycheck>;
     rothRemaining: number;
-    rothContributions: typeof FINANCIAL_PLAN.roth.contributions;
-    bills: typeof FINANCIAL_PLAN.bills;
+    rothContributions: NonNullable<FinancialProfile["roth"]>["contributions"];
+    bills: BillsPlan;
+    estimatedRecurringCashFlow: number | null;
+    recurringCashFlowComplete: boolean;
   };
 };
 
@@ -115,13 +123,14 @@ function monthLabel(date: Date): string {
   return new Intl.DateTimeFormat("en-US", { month: "short" }).format(date);
 }
 
-function monthlyHistory(transactions: RecentTransaction[], accounts: DashboardAccount[], now: Date) {
+function monthlyHistory(transactions: RecentTransaction[], accounts: DashboardAccount[], now: Date, includePending?: boolean) {
   return Array.from({ length: 6 }, (_, index) => {
     const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
     const key = monthKey(date);
     const monthly = accounting.computeMonthlyAccounting(
       transactions.filter((transaction) => transaction.date.startsWith(key)),
-      accounts
+      accounts,
+      { includePending }
     );
 
     return { label: monthLabel(date), income: monthly.income, spending: monthly.spending };
@@ -179,6 +188,35 @@ function sumBalances(accounts: DashboardAccount[]): number {
 
 function getPurpose(account: DashboardAccount): FinancialAccountPurpose {
   return getAccountPurpose(account);
+}
+
+function addKnownTotals(left: number | null, right: number | null): number | null {
+  return left == null || right == null ? null : left + right;
+}
+
+function combineAccountSummaries(
+  connected: ReturnType<typeof accounting.summarizeAccounts>,
+  profile: ProfileAccountBalanceSummary
+): ReturnType<typeof accounting.summarizeAccounts> {
+  if (!profile.configured) return connected;
+  if (!connected.configured) {
+    return {
+      configured: true,
+      cash: profile.cash,
+      investments: profile.investments,
+      crypto: null,
+      credit: profile.liabilities,
+      netWorth: profile.netWorth,
+    };
+  }
+  return {
+    configured: true,
+    cash: addKnownTotals(connected.cash, profile.cash),
+    investments: addKnownTotals(connected.investments, profile.investments),
+    crypto: connected.crypto,
+    credit: addKnownTotals(connected.credit, profile.liabilities),
+    netWorth: connected.netWorth == null || profile.netWorth == null ? null : connected.netWorth + profile.netWorth,
+  };
 }
 
 export function isCashHolding(holding: InvestmentHolding): boolean {
@@ -240,7 +278,7 @@ function buildPortfolioPosition(
   const purposePlaidIds = new Set(
     purposeAccounts.map((account) => account.plaid_account_id).filter((id): id is string => Boolean(id))
   );
-  const purposeHoldings = holdings.filter((holding) => purposePlaidIds.has(holding.plaid_account_id) && !isCashHolding(holding));
+  const purposeHoldings = holdings.filter((holding) => holding.plaid_account_id != null && purposePlaidIds.has(holding.plaid_account_id) && !isCashHolding(holding));
   const currentValue = sumBalances(purposeAccounts);
   const investedValue = purposeHoldings.reduce((total, holding) => total + numericBalance(holding.institution_value), 0);
   const holdingsWithMetrics = purposeHoldings.map((holding) => {
@@ -277,6 +315,7 @@ export function buildDashboardViewModel({
   snapshots,
   weeklyTransactions = [],
   now = new Date(),
+  profile: suppliedProfile = STARTER_FINANCIAL_PROFILE,
 }: {
   accounts: DashboardAccount[];
   monthTransactions: RecentTransaction[];
@@ -285,10 +324,21 @@ export function buildDashboardViewModel({
   snapshots: InvestmentSnapshot[];
   weeklyTransactions?: RecentTransaction[];
   now?: Date;
+  profile?: FinancialProfile;
 }): DashboardViewModel {
+  const profile = normalizeFinancialProfile(suppliedProfile);
+  const monthlyIncomeEstimate = estimateMonthlyBudgetIncome(profile);
+  const monthlyExpenseEstimate = estimateMonthlyRecurringExpenses(profile);
+  // Use the original input here: normalization can materialize legacy manualBalances as account rows.
+  const profileAccountBalances = summarizeProfileAccountBalances(suppliedProfile);
+  const estimatedRecurringCashFlow = monthlyIncomeEstimate.estimatedMonthlyTakeHomeIncome != null && monthlyExpenseEstimate.estimatedMonthlyExpenses != null
+    ? monthlyIncomeEstimate.estimatedMonthlyTakeHomeIncome - monthlyExpenseEstimate.estimatedMonthlyExpenses
+    : null;
   const accountsWithClass = accounts.map((account) => ({ ...account, accountClass: getDashboardAccountClass(account) }));
-  const accountSummary = accounting.summarizeAccounts(accounts);
-  const monthly = accounting.computeMonthlyAccounting(monthTransactions, accounts);
+  const connectedAccountSummary = accounting.summarizeAccounts(accounts);
+  const accountSummary = combineAccountSummaries(connectedAccountSummary, profileAccountBalances);
+  const includePending = profile.budgetingPreferences?.includePendingTransactions;
+  const monthly = accounting.computeMonthlyAccounting(monthTransactions, accounts, { includePending });
   const cashAccounts = accountsWithClass.filter((account) => account.accountClass === "cash");
   const creditAccounts = accountsWithClass.filter((account) => account.accountClass === "credit");
   const retirementAccounts = accountsWithClass.filter((account) => account.accountClass === "retirement");
@@ -306,10 +356,16 @@ export function buildDashboardViewModel({
     .reduce((total, account) => total + numericBalance(account.current_balance), 0);
   const equitiesPosition = buildPortfolioPosition(accountsWithClass, holdings, "equities");
   const retirementPosition = buildPortfolioPosition(accountsWithClass, holdings, "retirement");
+  const configuredSpendingTarget = profile.budget?.monthlySpendingTarget ??
+    (profile.budget?.expenses?.length ? profile.budget.expenses.reduce((total, line) => total + line.amount, 0) : undefined);
 
   return {
     accountSummary,
+    connectedAccountSummary,
+    profileAccountBalances,
     monthly,
+    monthlyIncomeEstimate,
+    monthlyExpenseEstimate,
     budgetLines: accounting.getDashboardBudgetTotals(monthly.spendingByCategory),
     accounts: accountsWithClass,
     cashAccounts,
@@ -319,13 +375,16 @@ export function buildDashboardViewModel({
     retirementAssets,
     netCashFlow,
     savingsRate,
-    spendingBudgetUsage: accounting.getBudgetUsagePercent(DASHBOARD_TARGETS.monthlySpendingGoal, monthly.spending),
+    spendingBudgetUsage: configuredSpendingTarget == null ? null : accounting.getBudgetUsagePercent(configuredSpendingTarget, monthly.spending),
     projectedMonthEndSpending,
-    monthlyHistory: monthlyHistory(historicalTransactions, accounts, now),
+    monthlyHistory: monthlyHistory(historicalTransactions, accounts, now, includePending),
     investmentPerformance: getInvestmentPerformance(holdings, snapshots, now),
     portfolioGrowth: buildPortfolioGrowthSeries(snapshots, accounts),
     overallPosition: {
       netWorth: accountSummary.netWorth,
+      connectedNetWorth: connectedAccountSummary.netWorth,
+      profileAccountNetWorth: profileAccountBalances.configured ? profileAccountBalances.netWorth : null,
+      netWorthComplete: accountSummary.netWorth != null && (!profileAccountBalances.configured || profileAccountBalances.complete),
       checkingAccounts,
       checkingBalance: sumBalances(checkingAccounts),
     },
@@ -335,20 +394,27 @@ export function buildDashboardViewModel({
       hysa: {
         accounts: hysaAccounts,
         currentBalance: sumBalances(hysaAccounts) + equitiesPosition.cashValue,
-        configuredApy: FINANCIAL_PLAN.bills.intendedApy,
+        configuredApy: profile.bills?.intendedApy ?? null,
       },
     },
     weeklySpending: calculateWeeklySpending({
       asOf: now,
       transactions: weeklyTransactions,
       venmoBalance,
+      profile,
     }),
     financialPlan: {
-      paycheck: getPaycheckAllocation(),
-      nextPaycheck: getCurrentOrNextPlannedPaycheck(now),
-      rothRemaining: FINANCIAL_PLAN.roth.totalRemaining,
-      rothContributions: FINANCIAL_PLAN.roth.contributions,
-      bills: FINANCIAL_PLAN.bills,
+      paycheck: getPaycheckAllocation(profile),
+      nextPaycheck: getCurrentOrNextPlannedPaycheck(now, profile),
+      rothRemaining: profile.roth?.totalRemaining ?? 0,
+      rothContributions: profile.roth?.contributions ?? [],
+      bills: {
+        reservePurpose: "bills-cash-reserve",
+        ...profile.bills,
+        monthlyObligations: { ...profile.bills?.monthlyObligations },
+      },
+      estimatedRecurringCashFlow,
+      recurringCashFlowComplete: estimatedRecurringCashFlow != null && monthlyIncomeEstimate.complete && monthlyExpenseEstimate.complete,
     },
   };
 }
