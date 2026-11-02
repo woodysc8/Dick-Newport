@@ -1,6 +1,7 @@
 import type { FinancialProfile, RecurringExpenseProfile } from "./financialProfileDefaults";
 import { toMonthlyIncome } from "./monthlyIncomeEstimate";
 
+export type ExpenseCalculationStatus = "complete" | "partial" | "unavailable";
 export type ExpenseExclusionReason = "unknown-amount" | "invalid-amount" | "unknown-frequency" | "irregular-expense" | "unsupported-frequency";
 
 export type MonthlyExpenseEstimateItem = {
@@ -21,6 +22,7 @@ export type MonthlyExpenseEstimate = {
   recordCount: number;
   includedProportion: number | null;
   excludedItems: MonthlyExpenseEstimateItem[];
+  status: ExpenseCalculationStatus;
   complete: boolean;
   partial: boolean;
 };
@@ -37,6 +39,7 @@ export function estimateMonthlyRecurringExpenses(profile: FinancialProfile): Mon
       recordCount: 0,
       includedProportion: null,
       excludedItems: [],
+      status: "unavailable",
       complete: false,
       partial: false,
     };
@@ -49,6 +52,11 @@ export function estimateMonthlyRecurringExpenses(profile: FinancialProfile): Mon
   // An explicitly empty list means a configured zero. If every non-empty row is
   // unknown or unusable, retain an unavailable total instead of implying zero.
   const estimatedMonthlyExpenses = expenses.length === 0 || includedItems.length > 0 ? knownTotal : null;
+  const status: ExpenseCalculationStatus = excludedItems.length === 0
+    ? "complete"
+    : includedItems.length > 0
+      ? "partial"
+      : "unavailable";
 
   return {
     configured: true,
@@ -58,8 +66,9 @@ export function estimateMonthlyRecurringExpenses(profile: FinancialProfile): Mon
     recordCount: items.length,
     includedProportion: items.length === 0 ? null : includedItems.length / items.length,
     excludedItems,
-    complete: excludedItems.length === 0,
-    partial: excludedItems.length > 0,
+    status,
+    complete: status === "complete",
+    partial: status === "partial",
   };
 }
 

@@ -79,6 +79,24 @@ describe("normalizeFinancialProfile", () => {
     expect(normalizeFinancialProfile(profile)).toMatchObject({ debts: profile.debts, recurringExpenses: profile.recurringExpenses });
   });
 
+  it("validates property values, ownership, and currency without changing mortgage debts", () => {
+    const profile: FinancialProfile = {
+      ...STARTER_FINANCIAL_PROFILE,
+      properties: [{ id: "home", name: "Home", propertyType: "primary-residence", estimatedMarketValue: 300000, ownershipPercentage: 50, currency: "USD" }],
+      debts: [{ name: "Mortgage", type: "mortgage", balance: 150000, minimumPayment: 1200 }],
+    };
+    expect(normalizeFinancialProfile(profile).properties).toEqual(profile.properties);
+    expect(validateFinancialProfileCollections({
+      ...profile,
+      properties: [{ ...profile.properties![0], estimatedMarketValue: -1, ownershipPercentage: 101, currency: "US" }],
+    })).toMatchObject({
+      "properties.0.estimatedMarketValue": expect.any(String),
+      "properties.0.ownershipPercentage": expect.any(String),
+      "properties.0.currency": expect.any(String),
+    });
+    expect(profile.debts?.[0]).not.toHaveProperty("linkedDebtId");
+  });
+
   it("preserves absent values as unknown and explicit zero as entered", () => {
     const profile: FinancialProfile = {
       ...STARTER_FINANCIAL_PROFILE,

@@ -92,6 +92,17 @@ export function validateFinancialProfileCollections(profile: FinancialProfile): 
     if (account.balanceSource === "unknown" && account.balance !== undefined) errors[`financialAccounts.${index}.balanceSource`] = "Choose manual or imported for a balance that has been entered.";
     if (account.currency !== undefined && !/^[A-Z]{3}$/.test(account.currency)) errors[`financialAccounts.${index}.currency`] = "Use a three-letter currency code.";
   });
+  profile.properties?.forEach((property, index) => {
+    if (property.estimatedMarketValue !== undefined && (!Number.isFinite(property.estimatedMarketValue) || property.estimatedMarketValue < 0)) {
+      errors[`properties.${index}.estimatedMarketValue`] = "Property value must be non-negative or left unknown.";
+    }
+    if (!Number.isFinite(property.ownershipPercentage) || property.ownershipPercentage < 0 || property.ownershipPercentage > 100) {
+      errors[`properties.${index}.ownershipPercentage`] = "Ownership must be between 0 and 100 percent.";
+    }
+    if (!/^[A-Z]{3}$/.test(property.currency)) {
+      errors[`properties.${index}.currency`] = "Use a three-letter currency code.";
+    }
+  });
   profile.retirementContributionPlans?.forEach((plan, index) => {
     if (!nonNegative(plan.contribution.amount)) errors[`retirementContributionPlans.${index}.amount`] = "Contribution amounts cannot be negative.";
     if (!percent(plan.contribution.percentage)) errors[`retirementContributionPlans.${index}.percentage`] = "Contribution percentages must be from 0 to 100.";

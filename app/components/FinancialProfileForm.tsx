@@ -11,12 +11,14 @@ import type {
   RecurringExpenseProfile,
   RetirementContributionProfile,
   SavingsAllocationProfile,
+  PropertyProfile,
 } from "../../lib/financialProfileDefaults";
 import { appendRecord, removeRecord, updateRecord, type EditableRecord } from "../../lib/profileCollectionEditor";
 import { saveFinancialProfile, type ProfileActionState } from "../profile/actions";
 
 type BudgetRow = { name: string; category: string; amount: number };
 type Setter<T> = React.Dispatch<React.SetStateAction<EditableRecord<T>[]>>;
+type EditableProperty = PropertyProfile & { editorId: string };
 const blankState: ProfileActionState = { errors: {} };
 
 function amount(value: number | undefined): string { return value == null ? "" : String(value); }
@@ -42,11 +44,18 @@ function isBudgetEligible(source: Partial<IncomeSource>): boolean {
   return source.basis === "net" && source.amount !== undefined && source.regularity === "regular" && !!source.frequency && source.frequency !== "irregular" && source.frequency !== "other";
 }
 function selectedValue(value: string | undefined): string { return value ?? ""; }
+function propertyRowsFrom(values: readonly PropertyProfile[] | undefined): EditableProperty[] {
+  return (values ?? []).map((value, index) => ({ ...value, editorId: `property-editor-${index}-${value.id}` }));
+}
+function stripPropertyEditorId(row: EditableProperty): PropertyProfile {
+  return Object.fromEntries(Object.entries(row).filter(([key]) => key !== "editorId")) as PropertyProfile;
+}
 
 export default function FinancialProfileForm({ profile, mode, saved = false }: { profile: FinancialProfile; mode: "onboarding" | "settings"; saved?: boolean }) {
   const [state, action, pending] = useActionState(saveFinancialProfile, blankState);
   const [incomeSources, setIncomeSources] = useState(rowsFrom(profile.incomeSources, (row, index) => row.name || String(index)));
   const [financialAccounts, setFinancialAccounts] = useState(rowsFrom(profile.financialAccounts, (row, index) => row.name || String(index)));
+  const [properties, setProperties] = useState(propertyRowsFrom(profile.properties));
   const [retirementPlans, setRetirementPlans] = useState(rowsFrom(profile.retirementContributionPlans, (row, index) => row.name || row.destinationAccountName || String(index)));
   const [debts, setDebts] = useState(rowsFrom(profile.debts, (row, index) => row.name || String(index)));
   const [recurringExpenses, setRecurringExpenses] = useState(rowsFrom(profile.recurringExpenses, (row, index) => row.name || String(index)));
@@ -120,6 +129,24 @@ export default function FinancialProfileForm({ profile, mode, saved = false }: {
       </article>)}
       <ErrorMessage message={state.errors.financialAccounts} />
       <AddButton onClick={() => add(financialAccountsSetter(setFinancialAccounts), { name: "", accountType: "unknown", balanceSource: "unknown" })}>Add financial account</AddButton>
+    </section>
+
+    <section className="space-y-4" aria-labelledby="properties-heading">
+      <SectionHeading id="properties-heading" title="Property and real estate" description="Property value is kept separate from cash, investment accounts, and mortgage debt. Leave unknown values blank." />
+      <input type="hidden" name="properties" value={JSON.stringify(properties.map(stripPropertyEditorId))} />
+      {properties.map((row, index) => <article key={row.editorId} className={cardClass} aria-label={`Property ${index + 1}`}>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <Field label={`Property ${index + 1} name`}><input value={row.name} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, name: event.target.value } : item))} placeholder="Example: Main home" className={inputClass} /></Field>
+          <Field label="Property type"><select value={row.propertyType} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, propertyType: event.target.value as PropertyProfile["propertyType"] } : item))} className={inputClass}><option value="primary-residence">Primary residence</option><option value="rental">Rental property</option><option value="vacation-secondary-home">Vacation / secondary home</option><option value="land">Land</option><option value="other">Other</option></select></Field>
+          <Field label="Estimated current market value" error={state.errors[`properties.${index}.estimatedMarketValue`]}><input type="number" min="0" step="0.01" value={amount(row.estimatedMarketValue)} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, estimatedMarketValue: event.target.value === "" ? undefined : Number(event.target.value) } : item))} placeholder="Unknown" className={inputClass} /></Field>
+          <Field label="Ownership percentage" hint="Defaults to 100% for new properties." error={state.errors[`properties.${index}.ownershipPercentage`]}><input type="number" min="0" max="100" step="0.01" value={amount(row.ownershipPercentage)} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, ownershipPercentage: event.target.value === "" ? undefined as never : Number(event.target.value) } : item))} className={inputClass} /></Field>
+          <Field label="Currency" error={state.errors[`properties.${index}.currency`]}><input value={row.currency} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, currency: event.target.value.toUpperCase() } : item))} maxLength={3} className={inputClass} /></Field>
+          <Field label="Notes"><input value={row.notes ?? ""} onChange={(event) => setProperties((rows) => rows.map((item) => item.editorId === row.editorId ? { ...item, notes: event.target.value || undefined } : item))} placeholder="Optional" className={inputClass} /></Field>
+        </div>
+        <Remove onClick={() => setProperties((rows) => rows.filter((item) => item.editorId !== row.editorId))} label={`Remove property ${index + 1}`} />
+      </article>)}
+      <ErrorMessage message={state.errors.properties} />
+      <AddButton onClick={() => setProperties((rows) => [...rows, { id: crypto.randomUUID(), editorId: crypto.randomUUID(), name: "", propertyType: "primary-residence", ownershipPercentage: 100, currency: profile.currency }])}>Add property</AddButton>
     </section>
 
     <fieldset className="space-y-4">

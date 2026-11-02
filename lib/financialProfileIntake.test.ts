@@ -192,6 +192,54 @@ describe("financial profile intake", () => {
     expect(result.errors.financialAccounts).toMatch(/type/);
   });
 
+  it("supports multiple properties, partial ownership, unknown values, currency defaults, and reloads them", () => {
+    const properties = [
+      { id: "property-home", name: "Main home", propertyType: "primary-residence", estimatedMarketValue: 400000, ownershipPercentage: 50, currency: "USD", notes: "Joint ownership" },
+      { id: "property-land", name: "Land", propertyType: "land", ownershipPercentage: 100 },
+    ];
+    const saved = parseFinancialProfileIntake(form({ properties: JSON.stringify(properties) }), STARTER_FINANCIAL_PROFILE);
+    expect(saved.errors).toEqual({});
+    expect(saved.profile?.properties).toEqual([
+      properties[0],
+      { ...properties[1], currency: "USD" },
+    ]);
+
+    const reloaded = parseFinancialProfileIntake(form({ properties: JSON.stringify(saved.profile?.properties) }), saved.profile!);
+    expect(reloaded.errors).toEqual({});
+    expect(reloaded.profile?.properties).toEqual(saved.profile?.properties);
+  });
+
+  it("rejects invalid property values, ownership percentages, and currencies", () => {
+    const negative = parseFinancialProfileIntake(form({
+      properties: JSON.stringify([{ id: "negative", name: "Home", propertyType: "primary-residence", estimatedMarketValue: -1, ownershipPercentage: 100, currency: "USD" }]),
+    }), STARTER_FINANCIAL_PROFILE);
+    expect(negative.profile).toBeUndefined();
+    expect(negative.errors["properties.0.estimatedMarketValue"]).toMatch(/non-negative/);
+
+    const ownership = parseFinancialProfileIntake(form({
+      properties: JSON.stringify([{ id: "ownership", name: "Home", propertyType: "primary-residence", ownershipPercentage: 101, currency: "USD" }]),
+    }), STARTER_FINANCIAL_PROFILE);
+    expect(ownership.profile).toBeUndefined();
+    expect(ownership.errors["properties.0.ownershipPercentage"]).toMatch(/between 0 and 100/);
+
+    const currency = parseFinancialProfileIntake(form({
+      properties: JSON.stringify([{ id: "currency", name: "Home", propertyType: "primary-residence", ownershipPercentage: 100, currency: "US" }]),
+    }), STARTER_FINANCIAL_PROFILE);
+    expect(currency.profile).toBeUndefined();
+    expect(currency.errors["properties.0.currency"]).toMatch(/three-letter/);
+  });
+
+  it("preserves profiles without properties and does not duplicate mortgage debt data", () => {
+    const legacy = parseFinancialProfileIntake(form({}), {
+      ...STARTER_FINANCIAL_PROFILE,
+      debts: [{ name: "Home mortgage", type: "mortgage", balance: 250000, minimumPayment: 1800 }],
+    });
+    expect(legacy.errors).toEqual({});
+    expect(legacy.profile?.properties).toBeUndefined();
+    expect(legacy.profile?.debts).toEqual([{ name: "Home mortgage", type: "mortgage", balance: 250000, minimumPayment: 1800 }]);
+    expect(legacy.profile?.debts?.[0]).not.toHaveProperty("linkedDebtId");
+  });
+
   it("updates only the authenticated owner's profile row", async () => {
     const versionFilter = { select: vi.fn(), maybeSingle: vi.fn().mockResolvedValue({ data: { id: "auth-owner" }, error: null }) };
     const eq = vi.fn().mockReturnValue(versionFilter);

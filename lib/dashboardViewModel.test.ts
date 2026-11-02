@@ -260,6 +260,18 @@ describe("cash-aware portfolio positions", () => {
     expect(view.monthlyIncomeEstimate).toMatchObject({ estimatedMonthlyTakeHomeIncome: 500, legacyFallbackUsed: true });
   });
 
+  it("keeps all-excluded configured income unavailable without breaking dashboard cash-flow fields", () => {
+    const view = buildDashboardViewModel({
+      accounts: [], monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
+      profile: {
+        ...STARTER_FINANCIAL_PROFILE,
+        incomeSources: [{ name: "Gross-only source", type: "employment", amount: 1000, basis: "gross", frequency: "monthly", regularity: "regular", includeInBudgetEstimate: true }],
+      },
+    });
+    expect(view.monthlyIncomeEstimate).toMatchObject({ estimatedMonthlyTakeHomeIncome: null, status: "unavailable" });
+    expect(view.financialPlan.estimatedRecurringCashFlow).toBeNull();
+  });
+
   it("combines configured income and recurring expenses without changing actual cash flow", () => {
     const view = buildDashboardViewModel({
       accounts: [], monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],

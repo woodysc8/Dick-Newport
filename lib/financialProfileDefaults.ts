@@ -12,6 +12,8 @@ export type FinancialProfile = {
   incomeSources?: readonly IncomeSource[];
   /** New user-editable account descriptions; imported account rows remain separate. */
   financialAccounts?: readonly FinancialAccountProfile[];
+  /** Property assets are kept separate from cash, investments, and debt balances. */
+  properties?: readonly PropertyProfile[];
   /** Manual estimates; they are not connected-account observations. */
   manualBalances?: { cash?: number; savings?: number; source: "user-entered" };
   debts?: readonly DebtProfile[];
@@ -67,6 +69,18 @@ export type FinancialAccountProfile = {
   currency?: string;
   balance?: number;
   balanceSource: BalanceSource;
+};
+
+export type PropertyType = "primary-residence" | "rental" | "vacation-secondary-home" | "land" | "other";
+
+export type PropertyProfile = {
+  id: string;
+  name: string;
+  propertyType: PropertyType;
+  estimatedMarketValue?: number;
+  ownershipPercentage: number;
+  currency: string;
+  notes?: string;
 };
 
 export type RetirementContributionValue =

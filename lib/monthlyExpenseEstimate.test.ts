@@ -28,7 +28,7 @@ describe("estimateMonthlyRecurringExpenses", () => {
   it("keeps unknown amounts unavailable and preserves explicit zero", () => {
     const unknown = estimateMonthlyRecurringExpenses(profile([expense({ amount: undefined })]));
     const zero = estimateMonthlyRecurringExpenses(profile([expense({ amount: 0 })]));
-    expect(unknown).toMatchObject({ estimatedMonthlyExpenses: null, partial: true, excludedItems: [{ exclusionReason: "unknown-amount", amount: undefined }] });
+    expect(unknown).toMatchObject({ estimatedMonthlyExpenses: null, status: "unavailable", partial: false, excludedItems: [{ exclusionReason: "unknown-amount", amount: undefined }] });
     expect(zero).toMatchObject({ estimatedMonthlyExpenses: 0, items: [{ included: true, estimatedMonthlyAmount: 0 }] });
   });
 
@@ -43,7 +43,7 @@ describe("estimateMonthlyRecurringExpenses", () => {
   });
 
   it("returns a complete zero estimate for an empty configured collection", () => {
-    expect(estimateMonthlyRecurringExpenses(profile([]))).toMatchObject({ configured: true, estimatedMonthlyExpenses: 0, includedCount: 0, recordCount: 0, includedProportion: null, complete: true });
+    expect(estimateMonthlyRecurringExpenses(profile([]))).toMatchObject({ configured: true, estimatedMonthlyExpenses: 0, status: "complete", includedCount: 0, recordCount: 0, includedProportion: null, complete: true, partial: false });
   });
 
   it("leaves legacy-only estimates unavailable and does not rewrite existing legacy amounts", () => {
@@ -73,7 +73,7 @@ describe("estimateMonthlyRecurringExpenses", () => {
 
   it("reports excluded records and marks the total partial", () => {
     const result = estimateMonthlyRecurringExpenses(profile([expense({ amount: 200 }), expense({ name: "Unknown bill", amount: undefined }), expense({ name: "Irregular fee", frequency: "irregular" })]));
-    expect(result).toMatchObject({ estimatedMonthlyExpenses: 200, includedCount: 1, recordCount: 3, includedProportion: 1 / 3, complete: false, partial: true });
+    expect(result).toMatchObject({ estimatedMonthlyExpenses: 200, includedCount: 1, recordCount: 3, includedProportion: 1 / 3, status: "partial", complete: false, partial: true });
     expect(result.excludedItems.map((item) => item.exclusionReason)).toEqual(["unknown-amount", "irregular-expense"]);
   });
 

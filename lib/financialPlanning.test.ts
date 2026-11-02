@@ -22,6 +22,9 @@ describe("calculateFinancialPlanning", () => {
     expect(result.budgetUtilization).toBe(50);
     expect(result.goals[0]).toMatchObject({ targetAmount: 12000, targetDate: "2027-01-01", progress: null });
     expect(result.complete).toBe(true);
+    expect(result.cashFlowStatus).toBe("complete");
+    expect(result.retirementStatus).toBe("complete");
+    expect(result.goalsStatus).toBe("complete");
   });
 
   it("keeps an empty profile unavailable rather than treating missing values as zero", () => {
@@ -97,6 +100,51 @@ describe("calculateFinancialPlanning", () => {
     expect(result.remainingMonthlyCash).toBeNull();
   });
 
+  it("does not calculate remaining cash from a partial income subtotal", () => {
+    const result = calculateFinancialPlanning({
+      ...completeProfile,
+      incomeSources: [
+        completeProfile.incomeSources![0],
+        { ...completeProfile.incomeSources![0], name: "Unknown", amount: undefined },
+      ],
+    });
+    expect(result.income.status).toBe("partial");
+    expect(result.income.estimatedMonthlyTakeHomeIncome).toBe(5000);
+    expect(result.remainingMonthlyCash).toBeNull();
+    expect(result.remainingMonthlyCashReason).toMatch(/income/);
+    expect(result.cashFlowStatus).toBe("partial");
+  });
+
+  it("does not calculate remaining cash from partial expenses, debts, or savings", () => {
+    const partialExpense = calculateFinancialPlanning({
+      ...completeProfile,
+      recurringExpenses: [
+        { name: "Rent", amount: 1500, frequency: "monthly" },
+        { name: "Unknown", frequency: "monthly" },
+      ],
+    });
+    const partialDebt = calculateFinancialPlanning({
+      ...completeProfile,
+      debts: [
+        { name: "Known", minimumPayment: 250, paymentFrequency: "monthly" },
+        { name: "Unknown", balance: 1000 },
+      ],
+    });
+    const partialSavings = calculateFinancialPlanning({
+      ...completeProfile,
+      savingsAllocations: [
+        { name: "Known", amount: 500, frequency: "monthly" },
+        { name: "Unknown", amount: 100 },
+      ],
+    });
+    expect(partialExpense.remainingMonthlyCash).toBeNull();
+    expect(partialDebt.remainingMonthlyCash).toBeNull();
+    expect(partialSavings.remainingMonthlyCash).toBeNull();
+    expect(partialExpense.recurringExpenses.status).toBe("partial");
+    expect(partialDebt.debtPayments.amountMeaning).toBe("known-subtotal");
+    expect(partialSavings.savingsAllocations.amountMeaning).toBe("known-subtotal");
+  });
+
   it("allows negative remaining cash when commitments exceed income", () => {
     const result = calculateFinancialPlanning({
       ...completeProfile,
@@ -155,6 +203,7 @@ describe("calculateFinancialPlanning", () => {
     expect(mixed.income.estimatedMonthlyTakeHomeIncome).toBe(5000);
     expect(mixed.income.status).toBe("partial");
     expect(mixed.status).toBe("partial");
+    expect(mixed.remainingMonthlyCash).toBeNull();
   });
 
   it("distinguishes missing and explicitly empty collections", () => {
@@ -169,6 +218,18 @@ describe("calculateFinancialPlanning", () => {
     });
     expect(empty.debtPayments).toMatchObject({ status: "complete", monthlyAmount: 0, amountMeaning: "complete" });
     expect(empty.savingsAllocations).toMatchObject({ status: "complete", monthlyAmount: 0, amountMeaning: "complete" });
+  });
+
+  it("does not require optional retirement plans for complete cash flow", () => {
+    const result = calculateFinancialPlanning({
+      ...completeProfile,
+      retirementContributionPlans: undefined,
+    });
+    expect(result.remainingMonthlyCash).toBe(2750);
+    expect(result.cashFlowStatus).toBe("complete");
+    expect(result.status).toBe("complete");
+    expect(result.retirementStatus).toBe("unavailable");
+    expect(result.complete).toBe(true);
   });
 
   it("marks mixed debt and savings amounts as known subtotals", () => {
@@ -197,7 +258,7 @@ describe("calculateFinancialPlanning", () => {
     });
     expect(result.retirementContributions.status).toBe("unavailable");
     expect(result.retirementContributions.excludedItems).toHaveLength(1);
-    expect(result.status).toBe("partial");
+    expect(result.status).toBe("complete");
   });
 
   it("keeps retirement-only incompleteness from reporting a complete result", () => {
@@ -209,9 +270,27 @@ describe("calculateFinancialPlanning", () => {
       }],
     });
     expect(result.retirementContributions.status).toBe("unavailable");
-    expect(result.status).toBe("partial");
-    expect(result.complete).toBe(false);
-    expect(result.partial).toBe(true);
+    expect(result.retirementContributions.status).toBe("unavailable");
+    expect(result.cashFlowStatus).toBe("complete");
+    expect(result.status).toBe("complete");
+    expect(result.complete).toBe(true);
+    expect(result.partial).toBe(false);
+  });
+
+  it("does not calculate percentage retirement from partial income", () => {
+    const result = calculateFinancialPlanning({
+      ...completeProfile,
+      incomeSources: [
+        completeProfile.incomeSources![0],
+        { ...completeProfile.incomeSources![0], name: "Unknown", amount: undefined },
+      ],
+      retirementContributionPlans: [{
+        name: "Percentage plan",
+        contribution: { basis: "percentage", percentage: 10, percentageOf: "net-income" },
+      }],
+    });
+    expect(result.retirementContributions.monthlyAmount).toBeNull();
+    expect(result.retirementContributions.status).toBe("unavailable");
   });
 
   it("identifies invalid goal amounts and dates without calculating progress", () => {
@@ -226,6 +305,14 @@ describe("calculateFinancialPlanning", () => {
     expect(result.goals[0].excludedItems[0].reason).toMatch(/amount/);
     expect(result.goals[1]).toMatchObject({ status: "unavailable", progress: null });
     expect(result.goals[1].excludedItems[0].reason).toMatch(/date/);
+    expect(result.goalsStatus).toBe("unavailable");
+  });
+
+  it("does not mark a name-only goal complete", () => {
+    const result = calculateFinancialPlanning({ ...completeProfile, goals: [{ name: "Unconfigured goal" }] });
+    expect(result.goals[0].status).toBe("unavailable");
+    expect(result.goalsStatus).toBe("unavailable");
+    expect(result.goals[0].progress).toBeNull();
   });
 
   it("rejects runtime frequencies outside the supported union", () => {

@@ -8,6 +8,8 @@ import type {
   FinancialProfile,
   IncomeSource,
   IncomeSourceType,
+  PropertyProfile,
+  PropertyType,
   RecurringExpenseProfile,
   RecurringFrequency,
   RetirementContributionProfile,
@@ -24,6 +26,7 @@ const recurringFrequencies: readonly RecurringFrequency[] = ["weekly", "biweekly
 const debtTypes: readonly NonNullable<DebtProfile["type"]>[] = ["credit-card", "student-loan", "mortgage", "auto-loan", "personal-loan", "other"];
 const incomeTypes: readonly IncomeSourceType[] = ["employment", "self-employment", "benefit", "rental", "investment", "other"];
 const accountTypes: readonly FinancialAccountType[] = ["unknown", "cash", "depository", "credit", "investment", "retirement", "loan", "other"];
+const propertyTypes: readonly PropertyType[] = ["primary-residence", "rental", "vacation-secondary-home", "land", "other"];
 const balanceSources: readonly BalanceSource[] = ["manual", "imported", "unknown"];
 
 function readText(form: FormData, key: string, maxLength = 120): string | undefined {
@@ -79,6 +82,7 @@ export function parseFinancialProfileIntake(form: FormData, current: FinancialPr
 
   const incomeSources = readRows(form, "incomeSources", errors, parseIncomeSource, "Each income source needs a name and type. Choose gross or net if you enter an amount; check frequency, regularity, and dates.");
   const financialAccounts = readRows(form, "financialAccounts", errors, parseFinancialAccount, "Each account needs a name, valid type, and balance source. Enter a valid currency and balance or leave them blank.");
+  const properties = readRows(form, "properties", errors, (row) => parseProperty(row, currency), "Each property needs a stable ID, name, property type, and valid ownership and currency details.");
   const retirementContributionPlans = readRows(form, "retirementContributionPlans", errors, parseRetirementContribution, "Check each contribution format, amount or percentage, frequency, and employer-match details.");
   const recurringExpenses = readRows(form, "recurringExpenses", errors, parseRecurringExpense, "Each recurring expense needs a name and frequency; amounts and due dates must be valid when entered.");
   const savingsAllocations = readRows(form, "savingsAllocations", errors, parseSavingsAllocation, "Each savings allocation needs a name and frequency; enter a non-negative amount or leave it unknown.");
@@ -117,6 +121,7 @@ export function parseFinancialProfileIntake(form: FormData, current: FinancialPr
     ...(hasLegacyIncomeFields ? { income: compact({ amount: incomeAmount, basis, frequency }) } : {}),
     ...(incomeSources !== undefined ? { incomeSources } : {}),
     ...(financialAccounts !== undefined ? { financialAccounts } : {}),
+    ...(properties !== undefined ? { properties } : {}),
     ...(retirementContributionPlans !== undefined ? { retirementContributionPlans } : {}),
     ...(hasLegacyBalanceFields ? { manualBalances: cash !== undefined || savings !== undefined ? { ...(cash !== undefined ? { cash } : {}), ...(savings !== undefined ? { savings } : {}), source: "user-entered" as const } : undefined } : {}),
     ...(debts !== undefined ? { debts } : {}),
@@ -180,6 +185,28 @@ function parseFinancialAccount(row: unknown): FinancialAccountProfile | null {
     ...(institutionLabel ? { institutionLabel } : {}),
     ...(currency ? { currency } : {}),
     ...(balance !== undefined ? { balance } : {}),
+  };
+}
+
+function parseProperty(row: unknown, defaultCurrency: string): PropertyProfile | null {
+  if (!isRecord(row) || !validName(row.name)) return null;
+  const id = optionalString(row.id, 100);
+  const propertyType = row.propertyType;
+  const estimatedMarketValue = optionalNumber(row.estimatedMarketValue, true);
+  const ownershipPercentage = optionalNumber(row.ownershipPercentage);
+  const rawCurrency = optionalString(row.currency, 3);
+  const currency = rawCurrency === undefined ? defaultCurrency : rawCurrency === null ? null : rawCurrency.toUpperCase();
+  const notes = optionalString(row.notes, 500);
+  if (!id || !propertyTypes.includes(propertyType as PropertyType) || estimatedMarketValue === null ||
+    ownershipPercentage === null || currency === null || notes === null) return null;
+  return {
+    id,
+    name: row.name.trim().slice(0, 100),
+    propertyType: propertyType as PropertyType,
+    ...(estimatedMarketValue !== undefined ? { estimatedMarketValue } : {}),
+    ownershipPercentage: ownershipPercentage ?? 100,
+    currency,
+    ...(notes ? { notes } : {}),
   };
 }
 

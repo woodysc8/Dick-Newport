@@ -52,6 +52,11 @@ export type FinancialPlanningSummary = {
   budgetUtilization: number | null;
   budgetUtilizationReason?: string;
   goals: FinancialGoalSummary[];
+  /** Status of the required income/expense/debt/savings cash-flow calculation. */
+  cashFlowStatus: CalculationStatus;
+  /** Retirement is reported separately because it is not required for cash-flow calculation. */
+  retirementStatus: CalculationStatus;
+  goalsStatus: CalculationStatus;
   status: CalculationStatus;
   complete: boolean;
   partial: boolean;
@@ -137,7 +142,7 @@ function retirementContributions(
     } else if (contribution.basis === "percentage" && contribution.percentageOf === "net-income") {
       const percentage = contribution.percentage;
       if (typeof percentage === "number" && Number.isFinite(percentage) && percentage >= 0 && percentage <= 100 &&
-        income.estimatedMonthlyTakeHomeIncome != null) {
+          income.status === "complete" && income.estimatedMonthlyTakeHomeIncome != null) {
         amount = income.estimatedMonthlyTakeHomeIncome * percentage / 100;
       }
     }
@@ -208,10 +213,12 @@ function goalSummaries(goals: readonly FinancialGoalProfile[] | undefined): Fina
     if (goal.targetAmount !== undefined && !validNonNegative(goal.targetAmount)) {
       excludedItems.push({ name: goal.name, reason: "target amount is invalid" });
     }
+
     if (goal.targetDate !== undefined && !isValidTargetDate(goal.targetDate)) {
       excludedItems.push({ name: goal.name, reason: "target date is invalid" });
     }
-    const validTarget = (goal.targetAmount === undefined || validNonNegative(goal.targetAmount)) &&
+    const validTarget = (goal.targetAmount !== undefined || goal.targetDate !== undefined) &&
+      (goal.targetAmount === undefined || validNonNegative(goal.targetAmount)) &&
       (goal.targetDate === undefined || isValidTargetDate(goal.targetDate));
     return {
       name: goal.name,
@@ -223,6 +230,16 @@ function goalSummaries(goals: readonly FinancialGoalProfile[] | undefined): Fina
       progressReason: "no-explicit-funding-relationship" as const,
     };
   });
+}
+
+function goalsStatus(goals: readonly FinancialGoalProfile[] | undefined, summaries: FinancialGoalSummary[]): CalculationStatus {
+  if (goals === undefined || summaries.length === 0) return goals === undefined ? "unavailable" : "complete";
+  const statuses = summaries.map((goal) => goal.status);
+  return statuses.every((status) => status === "complete")
+    ? "complete"
+    : statuses.some((status) => status === "complete" || status === "partial")
+      ? "partial"
+      : "unavailable";
 }
 
 export function calculateFinancialPlanning(
@@ -244,7 +261,17 @@ export function calculateFinancialPlanning(
     monthlyDebtPayments == null ? "monthly debt minimum payments" : null,
     monthlySavings == null ? "monthly savings allocations" : null,
   ].filter((value): value is string => value !== null);
-  const remainingMonthlyCash = missingRemainingCashInputs.length === 0
+  const incompleteCashFlowInputs = [
+    income.status !== "complete" ? "monthly take-home income" : null,
+    recurringExpenses.status !== "complete" ? "monthly recurring expenses" : null,
+    debtPaymentSummary.status !== "complete" ? "monthly debt minimum payments" : null,
+    savingsAllocationSummary.status !== "complete" ? "monthly savings allocations" : null,
+  ].filter((value): value is string => value !== null);
+  const cashFlowComponentsComplete = income.status === "complete" &&
+    recurringExpenses.status === "complete" &&
+    debtPaymentSummary.status === "complete" &&
+    savingsAllocationSummary.status === "complete";
+  const remainingMonthlyCash = cashFlowComponentsComplete && missingRemainingCashInputs.length === 0
     ? monthlyIncome! - monthlyExpenses! - monthlyDebtPayments! - monthlySavings!
     : null;
   const discretionarySpendingTarget = validNonNegative(profile.budget?.monthlySpendingTarget)
@@ -257,25 +284,25 @@ export function calculateFinancialPlanning(
     : null;
   const componentStatuses: CalculationStatus[] = [
     income.status,
-    recurringExpenses.configured
-      ? recurringExpenses.complete ? "complete" : recurringExpenses.includedCount > 0 ? "partial" : "unavailable"
-      : "unavailable",
+    recurringExpenses.status,
     debtPaymentSummary.status,
     savingsAllocationSummary.status,
     retirementContributionSummary.status,
   ];
+  const cashFlowStatuses = componentStatuses.slice(0, 4);
   const hasUsefulInformation = monthlyIncome !== null ||
     monthlyExpenses !== null ||
     debtPaymentSummary.knownMonthlyAmount !== null ||
     savingsAllocationSummary.knownMonthlyAmount !== null ||
-    retirementContributionSummary.knownMonthlyAmount !== null ||
-    componentStatuses.includes("partial");
-  const status: CalculationStatus = componentStatuses.every((value) => value === "complete") && remainingMonthlyCash !== null
+    cashFlowStatuses.includes("partial");
+  const cashFlowStatus: CalculationStatus = cashFlowStatuses.every((value) => value === "complete") && remainingMonthlyCash !== null
     ? "complete"
     : hasUsefulInformation
       ? "partial"
       : "unavailable";
   const goals = goalSummaries(profile.goals);
+  const goalsCalculationStatus = goalsStatus(profile.goals, goals);
+  const retirementStatus = retirementContributionSummary.status;
 
   return {
     income,
@@ -284,8 +311,8 @@ export function calculateFinancialPlanning(
     savingsAllocations: savingsAllocationSummary,
     retirementContributions: retirementContributionSummary,
     remainingMonthlyCash,
-    ...(missingRemainingCashInputs.length > 0
-      ? { remainingMonthlyCashReason: `Unavailable until ${missingRemainingCashInputs.join(", ")} are known.` }
+    ...(incompleteCashFlowInputs.length > 0
+      ? { remainingMonthlyCashReason: `Unavailable until ${incompleteCashFlowInputs.join(", ")} are complete and valid.` }
       : {}),
     discretionarySpendingTarget,
     ...(discretionarySpendingTarget == null
@@ -295,9 +322,14 @@ export function calculateFinancialPlanning(
         : {}),
     budgetUtilization,
     goals,
-    status,
-    complete: status === "complete",
-    partial: status === "partial",
+    cashFlowStatus,
+    retirementStatus,
+    goalsStatus: goalsCalculationStatus,
+    // Overall status describes the required cash-flow calculation. Optional
+    // retirement and goal data remain available through their own statuses.
+    status: cashFlowStatus,
+    complete: cashFlowStatus === "complete",
+    partial: cashFlowStatus === "partial",
   };
 }
 
