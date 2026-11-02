@@ -170,6 +170,8 @@ function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: Inve
     !isCashHolding(holding)
   );
   const currentAccountIds = new Set(currentHoldings.map((holding) => holding.plaid_account_id));
+  const currentCoverageComplete = currentAccountIds.size === eligibleAccountIds.size &&
+    [...eligibleAccountIds].every((id) => currentAccountIds.has(id));
   const currencies = new Set<string>();
   let unknownCurrency = false;
   for (const holding of currentHoldings) {
@@ -181,10 +183,10 @@ function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: Inve
   const reliableHoldings = currentHoldings.length > 0 && currentHoldings.every((holding) =>
     numberOrNull(holding.institution_value) != null && (numberOrNull(holding.cost_basis) ?? 0) > 0
   );
-  const currentValue = !mixedCurrency && reliableHoldings
+  const currentValue = currentCoverageComplete && !mixedCurrency && reliableHoldings
     ? currentHoldings.reduce((total, holding) => total + numberOrNull(holding.institution_value)!, 0)
     : null;
-  const currentCostBasis = !mixedCurrency && reliableHoldings
+  const currentCostBasis = currentCoverageComplete && !mixedCurrency && reliableHoldings
     ? currentHoldings.reduce((total, holding) => total + numberOrNull(holding.cost_basis)!, 0)
     : null;
   const target = new Date(now);
@@ -205,11 +207,18 @@ function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: Inve
     .filter(({ date, snapshotGroup, distance }) =>
       new Date(date).getTime() < now.getTime() &&
       distance <= 2 * 24 * 60 * 60 * 1000 &&
-      new Set(snapshotGroup.map((snapshot) => snapshot.plaid_account_id)).size === currentAccountIds.size &&
-      snapshotGroup.every((snapshot) => currentAccountIds.has(snapshot.plaid_account_id) && numberOrNull(snapshot.securities_value) != null)
+      new Set(snapshotGroup.map((snapshot) => snapshot.plaid_account_id)).size === eligibleAccountIds.size &&
+      snapshotGroup.every((snapshot) => {
+        const snapshotCurrency = accountCurrencyByPlaidId.get(snapshot.plaid_account_id);
+        return eligibleAccountIds.has(snapshot.plaid_account_id) &&
+          numberOrNull(snapshot.securities_value) != null &&
+          snapshotCurrency != null &&
+          currencies.size === 1 &&
+          currencies.has(snapshotCurrency);
+      })
     )
     .sort((left, right) => left.distance - right.distance)[0]?.snapshotGroup;
-  const weeklyValue = weeklySnapshotGroup?.length === currentAccountIds.size
+  const weeklyValue = weeklySnapshotGroup?.length === eligibleAccountIds.size
     ? weeklySnapshotGroup.reduce((total, snapshot) => total + numberOrNull(snapshot.securities_value)!, 0)
     : null;
   const sevenDayReturn = currentValue != null && weeklyValue != null && weeklyValue > 0
@@ -330,6 +339,7 @@ export function buildPortfolioGrowthSeries(
       .filter((id): id is string => Boolean(id))
   );
   const valuesByDate = new Map<string, Map<string, number>>();
+  const invalidDates = new Set<string>();
   const currencies = new Set<string>();
   let unknownCurrency = false;
 
@@ -339,7 +349,10 @@ export function buildPortfolioGrowthSeries(
     if (accountCurrency) currencies.add(accountCurrency);
     else unknownCurrency = true;
     const value = numberOrNull(snapshot.securities_value);
-    if (value == null) continue;
+    if (value == null) {
+      invalidDates.add(snapshot.snapshot_date);
+      continue;
+    }
     const accountValues = valuesByDate.get(snapshot.snapshot_date) ?? new Map<string, number>();
     accountValues.set(snapshot.plaid_account_id, (accountValues.get(snapshot.plaid_account_id) ?? 0) + value);
     valuesByDate.set(snapshot.snapshot_date, accountValues);
@@ -347,6 +360,12 @@ export function buildPortfolioGrowthSeries(
 
   const observations = Array.from(valuesByDate.entries())
     .sort(([left], [right]) => left.localeCompare(right))
+    .filter(([date, accountValues]) =>
+      !invalidDates.has(date) &&
+      accountValues.size === eligibleAccountIds.size &&
+      [...eligibleAccountIds].every((id) => accountValues.has(id)) &&
+      [...accountValues.values()].every((value) => Number.isFinite(value))
+    )
     .map(([date, accountValues]) => ({
       date,
       value: Array.from(accountValues.values()).reduce((total, value) => total + value, 0),
@@ -479,9 +498,11 @@ export function buildDashboardViewModel({
   const hysaSummary = accounting.summarizeAccounts(hysaAccounts);
   const canCombineHysaCash = hysaSummary.currency != null &&
     equitiesPosition.currency != null &&
+    hysaSummary.cash != null &&
     hysaSummary.currency === equitiesPosition.currency &&
     !hysaSummary.mixedCurrency &&
     equitiesPosition.cashValue != null;
+  const hysaCash = hysaSummary.cash;
   const venmoAccounts = accountsWithClass.filter((account) => getPurpose(account) === "venmo");
   const venmoCurrencies = new Set(
     venmoAccounts
@@ -541,7 +562,7 @@ export function buildDashboardViewModel({
         currentBalance: hysaAccounts.length === 0
           ? equitiesPosition.cashValue
           : canCombineHysaCash
-            ? (hysaSummary.cash ?? 0) + equitiesPosition.cashValue!
+            ? hysaCash! + equitiesPosition.cashValue!
             : null,
         currency: hysaAccounts.length === 0 ? equitiesPosition.currency : canCombineHysaCash ? hysaSummary.currency : null,
         configuredApy: profile.bills?.intendedApy ?? null,

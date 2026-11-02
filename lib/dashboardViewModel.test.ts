@@ -61,7 +61,6 @@ describe("buildPortfolioGrowthSeries", () => {
     ], accounts);
 
     expect(series.observations).toEqual([
-      { date: "2026-01-01", value: 100 },
       { date: "2026-01-03", value: 200 },
     ]);
   });
@@ -88,7 +87,34 @@ describe("buildPortfolioGrowthSeries", () => {
   it("represents insufficient history without fabricating observations", () => {
     const series = buildPortfolioGrowthSeries([snapshot({ portfolio_value: 100, securities_value: 100 })], accounts);
 
-    expect(series.observations).toHaveLength(1);
+    expect(series.observations).toHaveLength(0);
+  });
+
+  it("omits a date when one eligible account is missing from its snapshots", () => {
+    const series = buildPortfolioGrowthSeries([
+      snapshot({ plaid_account_id: "individual-id", securities_value: 100 }),
+    ], accounts);
+
+    expect(series.observations).toEqual([]);
+    expect(series.changeSinceFirstSnapshot).toBeNull();
+  });
+
+  it("omits a date with an unknown securities value", () => {
+    const series = buildPortfolioGrowthSeries([
+      snapshot({ plaid_account_id: "individual-id", securities_value: null }),
+      snapshot({ plaid_account_id: "roth-id", securities_value: 50 }),
+    ], accounts);
+
+    expect(series.observations).toEqual([]);
+  });
+
+  it("retains complete matching account snapshots", () => {
+    const series = buildPortfolioGrowthSeries([
+      snapshot({ plaid_account_id: "individual-id", securities_value: 100 }),
+      snapshot({ plaid_account_id: "roth-id", securities_value: 50 }),
+    ], accounts);
+
+    expect(series.observations).toEqual([{ date: "2026-01-01", value: 150 }]);
   });
 });
 
@@ -247,6 +273,65 @@ describe("cash-aware portfolio positions", () => {
     });
     expect(view.investmentPerformance.totalReturn).toBeNull();
     expect(view.investmentPerformance.totalReturnPercent).toBeNull();
+  });
+
+  it("requires every eligible account in current holdings for seven-day performance", () => {
+    const view = buildDashboardViewModel({
+      accounts,
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [holding({ institution_value: 120, cost_basis: 100 })],
+      snapshots: [
+        snapshot({ plaid_account_id: "individual-id", snapshot_date: "2026-01-01", securities_value: 100 }),
+        snapshot({ plaid_account_id: "roth-id", snapshot_date: "2026-01-01", securities_value: 50 }),
+      ],
+      now: new Date("2026-01-08T12:00:00.000Z"),
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.investmentPerformance.sevenDayReturn).toBeNull();
+    expect(view.investmentPerformance.sevenDayReturnPercent).toBeNull();
+  });
+
+  it("requires every eligible account in historical snapshots for seven-day performance", () => {
+    const view = buildDashboardViewModel({
+      accounts,
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [
+        holding({ institution_value: 120, cost_basis: 100 }),
+        holding({ id: "roth-holding", plaid_account_id: "roth-id", institution_value: 60, cost_basis: 50 }),
+      ],
+      snapshots: [
+        snapshot({ plaid_account_id: "individual-id", snapshot_date: "2026-01-01", securities_value: 100 }),
+      ],
+      now: new Date("2026-01-08T12:00:00.000Z"),
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.investmentPerformance.sevenDayReturn).toBeNull();
+    expect(view.investmentPerformance.sevenDayReturnPercent).toBeNull();
+  });
+
+  it("calculates seven-day performance for complete matching securities values", () => {
+    const view = buildDashboardViewModel({
+      accounts,
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [
+        holding({ institution_value: 120, cost_basis: 100 }),
+        holding({ id: "roth-holding", plaid_account_id: "roth-id", institution_value: 60, cost_basis: 50 }),
+      ],
+      snapshots: [
+        snapshot({ plaid_account_id: "individual-id", snapshot_date: "2026-01-01", securities_value: 100 }),
+        snapshot({ plaid_account_id: "roth-id", snapshot_date: "2026-01-01", securities_value: 50 }),
+      ],
+      now: new Date("2026-01-08T12:00:00.000Z"),
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.investmentPerformance.sevenDayReturn).toBe(30);
+    expect(view.investmentPerformance.sevenDayReturnPercent).toBe(20);
   });
 
   it("does not add legacy manual balances on top of an explicitly empty account list", () => {
@@ -523,6 +608,39 @@ describe("cash-aware portfolio positions", () => {
       snapshots: [],
       profile: STARTER_FINANCIAL_PROFILE,
     });
+    expect(view.financialPosition.hysa.currentBalance).toBeNull();
+    expect(view.financialPosition.hysa.currency).toBeNull();
+  });
+
+  it("combines a known HYSA balance with same-currency equities cash", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ institution_name: "Robinhood", account_name: "Brokerage", currency: "USD", current_balance: 500 }),
+        account({ institution_name: "Example Bank", account_name: "HYSA reserve", account_type: "depository", account_subtype: "savings", currency: "USD", current_balance: 50 }),
+      ],
+      monthTransactions: [], historicalTransactions: [],
+      holdings: [holding({ institution_value: 100, currency: "USD" })],
+      snapshots: [],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.financialPosition.hysa.currentBalance).toBe(450);
+    expect(view.financialPosition.hysa.currency).toBe("USD");
+  });
+
+  it("does not treat an unknown HYSA balance as zero", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ institution_name: "Robinhood", account_name: "Brokerage", currency: "USD", current_balance: 500 }),
+        account({ institution_name: "Example Bank", account_name: "HYSA reserve", account_type: "depository", account_subtype: "savings", currency: "USD", current_balance: 50 }),
+        account({ id: "unknown-hysa", institution_name: "Example Bank", account_name: "HYSA reserve 2", account_type: "depository", account_subtype: "savings", currency: "USD", current_balance: null }),
+      ],
+      monthTransactions: [], historicalTransactions: [],
+      holdings: [holding({ institution_value: 100, currency: "USD" })],
+      snapshots: [],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
     expect(view.financialPosition.hysa.currentBalance).toBeNull();
     expect(view.financialPosition.hysa.currency).toBeNull();
   });

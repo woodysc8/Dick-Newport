@@ -112,7 +112,7 @@ export async function getFinancialContext(
   const transactionLimit = Math.min(Math.max(options.transactionLimit ?? 50, 1), 200);
   const accountsQuery = supabase
     .from("accounts")
-    .select("institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, plaid_item_id")
+    .select("id, institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, plaid_item_id")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
   const monthlyTransactionsQuery = supabase
@@ -212,9 +212,8 @@ export async function getFinancialContext(
       category: transaction.category,
       pending: transaction.pending,
       currency: (() => {
-        const account = accounts.find((candidate) =>
-          candidate.id === transaction.account_id || candidate.plaid_account_id === transaction.account_id
-        );
+        const account = accounts.find((candidate) => candidate.id === transaction.account_id) ??
+          accounts.find((candidate) => candidate.plaid_account_id === transaction.account_id);
         return account?.currency ?? null;
       })(),
     })),
