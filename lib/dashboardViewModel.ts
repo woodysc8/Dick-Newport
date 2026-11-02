@@ -13,8 +13,9 @@ import {
   getCurrentOrNextPlannedPaycheck,
   getPaycheckAllocation,
 } from "./financialPlan";
+import { calculateFinancialPlanning, FinancialPlanningSummary } from "./financialPlanning";
 import { STARTER_FINANCIAL_PROFILE } from "./financialProfileDefaults";
-import type { FinancialProfile } from "./financialProfileDefaults";
+import type { DebtProfile, FinancialProfile, FinancialGoalProfile, PropertyProfile, RetirementContributionProfile } from "./financialProfileDefaults";
 import { calculateWeeklySpending, WeeklySpendingResult } from "./weeklySpending";
 import { isCashEquivalentAsset } from "./investmentSnapshots";
 import { estimateMonthlyBudgetIncome, MonthlyIncomeEstimate } from "./monthlyIncomeEstimate";
@@ -52,6 +53,10 @@ export type PortfolioGrowthSeries = {
   changeSinceFirstSnapshot: number | null;
 };
 
+export type DashboardProperty = PropertyProfile & {
+  ownershipAdjustedValue: number | null;
+};
+
 export type DashboardViewModel = {
   accountSummary: ReturnType<typeof accounting.summarizeAccounts>;
   connectedAccountSummary: ReturnType<typeof accounting.summarizeAccounts>;
@@ -59,6 +64,11 @@ export type DashboardViewModel = {
   monthly: MonthlyAccounting;
   monthlyIncomeEstimate: MonthlyIncomeEstimate;
   monthlyExpenseEstimate: MonthlyExpenseEstimate;
+  financialPlanning: FinancialPlanningSummary;
+  properties: DashboardProperty[];
+  debts: readonly DebtProfile[];
+  retirementContributionPlans: readonly RetirementContributionProfile[];
+  goals: readonly FinancialGoalProfile[];
   budgetLines: DashboardBudgetCategoryTotal[];
   accounts: AccountWithClass[];
   cashAccounts: AccountWithClass[];
@@ -339,6 +349,7 @@ export function buildDashboardViewModel({
   const accountSummary = combineAccountSummaries(connectedAccountSummary, profileAccountBalances);
   const includePending = profile.budgetingPreferences?.includePendingTransactions;
   const monthly = accounting.computeMonthlyAccounting(monthTransactions, accounts, { includePending });
+  const financialPlanning = calculateFinancialPlanning(profile, { actualMonthlySpending: monthly.spending });
   const cashAccounts = accountsWithClass.filter((account) => account.accountClass === "cash");
   const creditAccounts = accountsWithClass.filter((account) => account.accountClass === "credit");
   const retirementAccounts = accountsWithClass.filter((account) => account.accountClass === "retirement");
@@ -366,6 +377,16 @@ export function buildDashboardViewModel({
     monthly,
     monthlyIncomeEstimate,
     monthlyExpenseEstimate,
+    financialPlanning,
+    properties: (profile.properties ?? []).map((property) => ({
+      ...property,
+      ownershipAdjustedValue: property.estimatedMarketValue == null
+        ? null
+        : property.estimatedMarketValue * property.ownershipPercentage / 100,
+    })),
+    debts: profile.debts ?? [],
+    retirementContributionPlans: profile.retirementContributionPlans ?? [],
+    goals: profile.goals ?? [],
     budgetLines: accounting.getDashboardBudgetTotals(monthly.spendingByCategory),
     accounts: accountsWithClass,
     cashAccounts,

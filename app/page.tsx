@@ -85,6 +85,26 @@ function transactionCategory(transaction: RecentTransaction): string {
   return Array.isArray(transaction.category) ? transaction.category.join(" > ") : transaction.category ?? "Uncategorized";
 }
 
+function propertyTypeLabel(type: string): string {
+  return ({
+    "primary-residence": "Primary residence",
+    rental: "Rental property",
+    "vacation-secondary-home": "Vacation / secondary home",
+    land: "Land",
+    other: "Other",
+  } as Record<string, string>)[type] ?? type;
+}
+
+function debtTypeLabel(type: string | undefined): string {
+  return type ? type.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase()) : "Type not entered";
+}
+
+function planningDetail(status: "complete" | "partial" | "unavailable", excludedCount: number): string {
+  if (status === "complete") return "Complete from entered profile data";
+  if (status === "partial") return `Partial known subtotal · ${excludedCount} item(s) excluded`;
+  return "Unavailable until required inputs are entered";
+}
+
 function SectionHeader({ eyebrow, title, detail }: { eyebrow: string; title: string; detail?: string }) {
   return (
     <div>
@@ -312,6 +332,47 @@ export default async function Home() {
             <div className="mt-4 grid gap-4 sm:grid-cols-2"><Metric label="Cash entered by you" value={formatMoney(profile.manualBalances.cash)} /><Metric label="Savings entered by you" value={formatMoney(profile.manualBalances.savings)} /></div>
             <p className="mt-3 text-xs text-[var(--text-muted)]">These estimates are separate from connected account balances and are not included in net worth.</p>
           </Panel>}
+        </section>
+
+        <section className="mt-12">
+          <SectionHeader eyebrow="Profile assets and obligations" title="What you own and owe" detail="Property assets, profile accounts, and debts remain separate categories. Property values are not included in account balances or equity calculations." />
+          <div className="mt-5 grid gap-4 lg:grid-cols-2">
+            <Panel>
+              <h3 className="text-base font-semibold">Property assets</h3>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">Ownership-adjusted market values are shown without subtracting mortgage debt.</p>
+              {view.properties.length === 0 ? <div className="mt-5"><Empty>No properties have been entered.</Empty></div> : <div className="mt-5 divide-y divide-[var(--border)]">{view.properties.map((property) => <div key={property.id} className="py-4 first:pt-0"><div className="flex items-start justify-between gap-4"><div><p className="font-medium">{property.name}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{propertyTypeLabel(property.propertyType)} · {property.ownershipPercentage.toFixed(1)}% ownership</p></div><div className="text-right"><p className="font-semibold">{property.estimatedMarketValue == null ? "Unknown" : money(property.estimatedMarketValue, property.currency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">Estimated market value</p></div></div><div className="mt-3 flex items-center justify-between gap-4 text-sm"><span className="text-[var(--text-muted)]">Ownership-adjusted value</span><span className="font-semibold">{property.ownershipAdjustedValue == null ? "Unknown" : money(property.ownershipAdjustedValue, property.currency)} {property.currency}</span></div></div>)}</div>}
+            </Panel>
+            <Panel>
+              <h3 className="text-base font-semibold">Debt overview</h3>
+              <p className="mt-1 text-sm text-[var(--text-muted)]">Profile debts are shown separately from financial-account liabilities.</p>
+              {view.debts.length === 0 ? <div className="mt-5"><Empty>No debts have been entered.</Empty></div> : <div className="mt-5 divide-y divide-[var(--border)]">{view.debts.map((debt, index) => <div key={`${debt.name}-${index}`} className="py-4 first:pt-0"><div className="flex items-start justify-between gap-4"><div><p className="font-medium">{debt.name}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{debtTypeLabel(debt.type)}</p></div><p className="font-semibold">{debt.balance == null ? "Unknown balance" : formatMoney(debt.balance)}</p></div><div className="mt-3 grid grid-cols-2 gap-3 text-sm"><Metric label="Annual interest" value={debt.annualInterestRatePercent == null ? "Unknown" : `${debt.annualInterestRatePercent.toFixed(2)}%`} /><Metric label="Minimum payment" value={debt.minimumPayment == null ? "Unknown" : formatMoney(debt.minimumPayment)} detail={debt.minimumPayment == null ? undefined : debt.paymentFrequency ?? "Frequency unknown"} /></div></div>)}</div>}
+            </Panel>
+          </div>
+        </section>
+
+        <section className="mt-12">
+          <SectionHeader eyebrow="Generalized monthly plan" title="Your profile-based monthly picture" detail="Only complete calculations are used for remaining monthly cash. Partial subtotals are labeled and excluded records are explained." />
+          <Panel className="mt-5">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <Metric label="Take-home income" value={formatMoney(view.financialPlanning.income.estimatedMonthlyTakeHomeIncome)} detail={planningDetail(view.financialPlanning.income.status, view.financialPlanning.income.excludedSources.length)} />
+              <Metric label="Recurring expenses" value={formatMoney(view.financialPlanning.recurringExpenses.estimatedMonthlyExpenses)} detail={planningDetail(view.financialPlanning.recurringExpenses.status, view.financialPlanning.recurringExpenses.excludedItems.length)} />
+              <Metric label="Debt minimum payments" value={formatMoney(view.financialPlanning.debtPayments.monthlyAmount)} detail={planningDetail(view.financialPlanning.debtPayments.status, view.financialPlanning.debtPayments.excludedItems.length)} />
+              <Metric label="Savings allocations" value={formatMoney(view.financialPlanning.savingsAllocations.monthlyAmount)} detail={planningDetail(view.financialPlanning.savingsAllocations.status, view.financialPlanning.savingsAllocations.excludedItems.length)} />
+              <Metric label="Remaining monthly cash" value={formatMoney(view.financialPlanning.remainingMonthlyCash)} detail={view.financialPlanning.remainingMonthlyCash == null ? view.financialPlanning.remainingMonthlyCashReason : "Complete required cash-flow inputs"} positive={view.financialPlanning.remainingMonthlyCash != null && view.financialPlanning.remainingMonthlyCash >= 0} />
+            </div>
+            {view.financialPlanning.income.excludedSources.length > 0 && <p className="mt-4 text-xs leading-5 text-[var(--text-muted)]">Income excluded: {view.financialPlanning.income.excludedSources.map(({ source, reason }) => `${source.name} (${reason})`).join(", ")}</p>}
+            {view.financialPlanning.recurringExpenses.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Expenses excluded: {view.financialPlanning.recurringExpenses.excludedItems.map(({ name, exclusionReason }) => `${name} (${exclusionReason})`).join(", ")}</p>}
+            {view.financialPlanning.debtPayments.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Debt payments excluded: {view.financialPlanning.debtPayments.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
+            {view.financialPlanning.savingsAllocations.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Savings excluded: {view.financialPlanning.savingsAllocations.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
+            <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 lg:grid-cols-2">
+              <div><h3 className="font-semibold">Income sources</h3>{normalizedProfile.incomeSources?.length ? <div className="mt-3 divide-y divide-[var(--border)]">{normalizedProfile.incomeSources.map((source, index) => <div key={`${source.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span>{source.name} <span className="text-xs text-[var(--text-muted)]">· {source.type}</span></span><span>{source.amount == null ? "Unknown" : money(source.amount, profile.currency)}{source.frequency ? ` / ${source.frequency}` : ""}</span></div>)}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No income sources are configured.</p>}</div>
+              <div><h3 className="font-semibold">Recurring expenses</h3>{normalizedProfile.recurringExpenses?.length ? <div className="mt-3 divide-y divide-[var(--border)]">{normalizedProfile.recurringExpenses.map((expense, index) => <div key={`${expense.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span>{expense.name} <span className="text-xs text-[var(--text-muted)]">· {expense.category ?? "Uncategorized"}</span></span><span>{expense.amount == null ? "Unknown" : money(expense.amount, profile.currency)}{expense.frequency ? ` / ${expense.frequency}` : ""}</span></div>)}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No recurring expenses are configured.</p>}</div>
+            </div>
+            <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 lg:grid-cols-2">
+              <div><h3 className="font-semibold">Retirement contributions</h3>{view.retirementContributionPlans.length ? <div className="mt-3 divide-y divide-[var(--border)]">{view.retirementContributionPlans.map((plan, index) => { const contribution = plan.contribution; const contributionText = contribution.basis === "amount" ? contribution.amount == null ? "Amount unknown" : formatMoney(contribution.amount) : contribution.basis === "percentage" ? contribution.percentage == null ? "Percentage unknown" : `${contribution.percentage}% of ${contribution.percentageOf}` : "Legacy amount / percentage unresolved"; return <div key={`${plan.name}-${index}`} className="py-2 text-sm"><div className="flex items-center justify-between gap-4"><span>{plan.name}</span><span>{contributionText}</span></div><p className="mt-1 text-xs text-[var(--text-muted)]">{contribution.frequency ? `${contribution.frequency} · ` : ""}{plan.employerMatch?.percentage == null ? "Employer match unknown" : `Employer match ${plan.employerMatch.percentage}%${plan.employerMatch.maximumPercentageOfSalary == null ? "" : ` up to ${plan.employerMatch.maximumPercentageOfSalary}% of salary`}`}</p></div>; })}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No retirement contribution plans are configured.</p>}{view.financialPlanning.retirementContributions.excludedItems.length > 0 && <p className="mt-3 text-xs text-[var(--text-muted)]">Monthly contribution estimate exclusions: {view.financialPlanning.retirementContributions.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}</div>
+              <div><h3 className="font-semibold">Financial goals</h3>{view.goals.length ? <div className="mt-3 divide-y divide-[var(--border)]">{view.financialPlanning.goals.map((goal, index) => <div key={`${goal.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span>{goal.name}</span><span className="text-right">{goal.targetAmount == null ? "Target unknown" : formatMoney(goal.targetAmount)}{goal.targetDate ? ` · ${formatDate(goal.targetDate)}` : " · Date unknown"}</span></div>)}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No financial goals are configured.</p>}<p className="mt-3 text-xs leading-5 text-[var(--text-muted)]">Goal progress is unavailable because goals are not linked to specific funding accounts or allocations.</p></div>
+            </div>
+          </Panel>
         </section>
 
         <section className="mt-10">

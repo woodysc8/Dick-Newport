@@ -92,6 +92,57 @@ describe("buildPortfolioGrowthSeries", () => {
 });
 
 describe("cash-aware portfolio positions", () => {
+  it("exposes generalized planning, property ownership, debts, retirement plans, and goals", () => {
+    const view = buildDashboardViewModel({
+      accounts: [],
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: {
+        ...STARTER_FINANCIAL_PROFILE,
+        incomeSources: [{ name: "Salary", type: "employment", amount: 5000, basis: "net", frequency: "monthly", regularity: "regular", includeInBudgetEstimate: true }],
+        recurringExpenses: [
+          { name: "Rent", category: "housing", amount: 1500, frequency: "monthly" },
+          { name: "Utilities", category: "utilities", amount: 200, frequency: "monthly" },
+        ],
+        debts: [{ name: "Mortgage", type: "mortgage", balance: 250000, annualInterestRatePercent: 6, minimumPayment: 1800, paymentFrequency: "monthly" }],
+        savingsAllocations: [{ name: "Reserve", amount: 500, frequency: "monthly" }],
+        properties: [{ id: "home", name: "Home", propertyType: "primary-residence", estimatedMarketValue: 400000, ownershipPercentage: 50, currency: "USD" }],
+        retirementContributionPlans: [{ name: "401(k)", contribution: { basis: "percentage", percentage: 8, percentageOf: "gross-income" }, employerMatch: { percentage: 50, basis: "employee-contribution" } }],
+        goals: [{ name: "Emergency fund", targetAmount: 12000, targetDate: "2027-01-01" }],
+      },
+    });
+
+    expect(view.financialPlanning.remainingMonthlyCash).toBe(1000);
+    expect(view.financialPlanning.debtPayments.monthlyAmount).toBe(1800);
+    expect(view.properties[0].ownershipAdjustedValue).toBe(200000);
+    expect(view.debts[0].balance).toBe(250000);
+    expect(view.retirementContributionPlans[0].employerMatch?.percentage).toBe(50);
+    expect(view.financialPlanning.goals[0].progress).toBeNull();
+    expect(view.profileAccountBalances.liabilities).toBe(0);
+  });
+
+  it("keeps incomplete generalized profile values unavailable rather than displaying zero", () => {
+    const view = buildDashboardViewModel({
+      accounts: [],
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: {
+        ...STARTER_FINANCIAL_PROFILE,
+        properties: [{ id: "unknown", name: "Unknown property", propertyType: "other", ownershipPercentage: 50, currency: "USD" }],
+        debts: [{ name: "Unknown debt", type: "personal-loan" }],
+      },
+    });
+
+    expect(view.financialPlanning.remainingMonthlyCash).toBeNull();
+    expect(view.financialPlanning.status).toBe("unavailable");
+    expect(view.properties[0].ownershipAdjustedValue).toBeNull();
+    expect(view.debts[0].balance).toBeUndefined();
+  });
+
   it("keeps unset spending targets and bill amounts unknown for a blank profile", () => {
     const view = buildDashboardViewModel({
       accounts: [], monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
