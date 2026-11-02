@@ -9,6 +9,7 @@ function transaction(overrides: Partial<WeeklySpendingTransaction> = {}): Weekly
     name: "Purchase",
     merchant_name: "Local shop",
     category: ["Shops", "Shopping"],
+    account_id: "checking",
     ...overrides,
   };
 }
@@ -17,7 +18,9 @@ function calculate(transactions: readonly WeeklySpendingTransaction[], venmoBala
   return calculateWeeklySpending({
     asOf: "2026-10-08",
     transactions,
+    accounts: [{ id: "checking", currency: "USD" }],
     venmoBalance,
+    venmoCurrency: "USD",
     profile: LEGACY_EXAMPLE_FINANCIAL_PROFILE,
   });
 }
@@ -105,12 +108,70 @@ describe("calculateWeeklySpending", () => {
       transaction({ amount: 25, pending: false }),
       transaction({ amount: 40, pending: true }),
     ];
-    const includeByDefault = calculateWeeklySpending({ asOf: "2026-10-08", transactions, venmoBalance: 0, profile: STARTER_FINANCIAL_PROFILE });
+    const includeByDefault = calculateWeeklySpending({ asOf: "2026-10-08", transactions, accounts: [{ id: "checking", currency: "USD" }], venmoBalance: 0, profile: STARTER_FINANCIAL_PROFILE });
     const excludePending = calculateWeeklySpending({
-      asOf: "2026-10-08", transactions, venmoBalance: 0,
+      asOf: "2026-10-08", transactions, accounts: [{ id: "checking", currency: "USD" }], venmoBalance: 0,
       profile: { ...STARTER_FINANCIAL_PROFILE, budgetingPreferences: { includePendingTransactions: false } },
     });
     expect(includeByDefault.eligibleSpending).toBe(65);
     expect(excludePending.eligibleSpending).toBe(25);
+  });
+
+  it("keeps a single known transaction currency", () => {
+    const result = calculate([transaction({ amount: 40 })]);
+
+    expect(result.currency).toBe("USD");
+    expect(result.currencySafe).toBe(true);
+    expect(result.eligibleSpending).toBe(40);
+  });
+
+  it("suppresses mixed-currency weekly totals", () => {
+    const result = calculateWeeklySpending({
+      asOf: "2026-10-08",
+      transactions: [transaction({ amount: 40 }), transaction({ amount: 60, account_id: "euro" })],
+      accounts: [{ id: "checking", currency: "USD" }, { id: "euro", currency: "EUR" }],
+      venmoBalance: 0,
+      profile: LEGACY_EXAMPLE_FINANCIAL_PROFILE,
+    });
+
+    expect(result.currencySafe).toBe(false);
+    expect(result.currency).toBeNull();
+    expect(result.eligibleSpending).toBeNull();
+    expect(result.remainingFundingNeed).toBeNull();
+  });
+
+  it("treats a missing account ID as unknown currency", () => {
+    const result = calculate([transaction({ account_id: null })]);
+
+    expect(result.currencySafe).toBe(false);
+    expect(result.eligibleSpending).toBeNull();
+  });
+
+  it("treats a missing account currency as unknown", () => {
+    const result = calculateWeeklySpending({
+      asOf: "2026-10-08",
+      transactions: [transaction()],
+      accounts: [{ id: "checking", currency: null }],
+      venmoBalance: 0,
+      profile: LEGACY_EXAMPLE_FINANCIAL_PROFILE,
+    });
+
+    expect(result.currencySafe).toBe(false);
+    expect(result.currency).toBeNull();
+    expect(result.eligibleSpending).toBeNull();
+  });
+
+  it("preserves EUR weekly spending for a USD profile", () => {
+    const result = calculateWeeklySpending({
+      asOf: "2026-10-08",
+      transactions: [transaction()],
+      accounts: [{ id: "checking", currency: "EUR" }],
+      venmoBalance: 0,
+      profile: { ...LEGACY_EXAMPLE_FINANCIAL_PROFILE, currency: "USD" },
+    });
+
+    expect(result.currency).toBe("EUR");
+    expect(result.currencySafe).toBe(true);
+    expect(result.eligibleSpending).toBe(250);
   });
 });

@@ -11,6 +11,7 @@ type Transaction = {
   merchant_name?: string | null;
   category?: string | string[] | null;
   pending?: boolean | null;
+  account_id?: string | null;
 };
 
 function tx(overrides: Partial<Transaction> = {}): Transaction {
@@ -27,6 +28,7 @@ function account(overrides: Partial<DashboardAccount> = {}): DashboardAccount {
     account_subtype: "checking",
     current_balance: 0,
     available_balance: null,
+    currency: "USD",
     ...overrides,
   };
 }
@@ -42,6 +44,18 @@ describe("accounting foundation regression cases", () => {
     expect(summary.cash).toBe(4000);
     expect(summary.credit).toBe(400);
     expect(summary.netWorth).toBe(3600);
+  });
+
+  it("preserves single-currency connected totals", () => {
+    const summary = accounting.summarizeAccounts([
+      account({ current_balance: 1200, currency: "USD" }),
+      account({ id: "savings", current_balance: 800, currency: "USD" }),
+      account({ id: "card", account_type: "credit", current_balance: 200, currency: "USD" }),
+    ]);
+    expect(summary.currency).toBe("USD");
+    expect(summary.cash).toBe(2000);
+    expect(summary.credit).toBe(200);
+    expect(summary.netWorth).toBe(1800);
   });
 
   it("keeps an empty connected account set unavailable", () => {
@@ -151,6 +165,38 @@ describe("accounting foundation regression cases", () => {
   it("keeps missing or invalid balances unknown rather than converting them to zero", () => {
     expect(accounting.summarizeAccounts([account({ current_balance: null })]).cash).toBeNull();
     expect(accounting.summarizeAccounts([account({ current_balance: "not-a-number" })]).cash).toBeNull();
+  });
+
+  it("keeps connected totals separate by currency", () => {
+    const summary = accounting.summarizeAccounts([
+      account({ current_balance: 100, currency: "USD" }),
+      account({ id: "eur", current_balance: 200, currency: "EUR" }),
+    ]);
+    expect(summary.netWorth).toBeNull();
+    expect(summary.currencyTotals.USD.cash).toBe(100);
+    expect(summary.currencyTotals.EUR.cash).toBe(200);
+    expect(summary.mixedCurrency).toBe(true);
+  });
+
+  it("marks transaction totals unsafe when linked accounts use different currencies", () => {
+    const result = accounting.computeMonthlyAccounting([
+      tx({ account_id: "usd", amount: 10, category: "Groceries" }),
+      tx({ account_id: "eur", amount: 20, category: "Groceries" }),
+    ], [
+      account({ id: "usd", currency: "USD" }),
+      account({ id: "eur", currency: "EUR" }),
+    ]);
+    expect(result.mixedCurrency).toBe(true);
+    expect(result.currencySafe).toBe(false);
+  });
+
+  it("does not assign a currency to transactions whose linked account currency is missing", () => {
+    const result = accounting.computeMonthlyAccounting([
+      tx({ account_id: "unknown", amount: 10, category: "Groceries" }),
+    ], [account({ id: "unknown", currency: null })]);
+    expect(result.currency).toBeNull();
+    expect(result.unknownCurrency).toBe(true);
+    expect(result.currencySafe).toBe(false);
   });
 
   it("includes a large one-off purchase alongside regular bills in spending", () => {

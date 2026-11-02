@@ -39,6 +39,10 @@ export interface MonthlyAccounting {
   investmentActivity: number;
   pendingSpending: number;
   spendingByCategory: SpendingCategoryTotal[];
+  currency: string | null;
+  mixedCurrency: boolean;
+  unknownCurrency: boolean;
+  currencySafe: boolean;
 }
 
 export interface AccountSummary {
@@ -48,6 +52,16 @@ export interface AccountSummary {
   crypto: number | null;
   credit: number | null;
   netWorth: number | null;
+  currency: string | null;
+  currencies: string[];
+  mixedCurrency: boolean;
+  currencyTotals: Record<string, {
+    cash: number | null;
+    investments: number | null;
+    crypto: number | null;
+    credit: number | null;
+    netWorth: number | null;
+  }>;
 }
 
 export interface DashboardBudgetCategoryTotal {
@@ -73,6 +87,11 @@ function normalize(value: unknown): string {
   return String(value ?? "")
     .toLowerCase()
     .trim();
+}
+
+function normalizeCurrency(value: unknown): string | null {
+  const currency = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
 }
 
 function getTransactionText(tx: any): string {
@@ -578,6 +597,14 @@ export function summarizeAccounts(
     crypto: { amount: 0, unknown: false },
     credit: { amount: 0, unknown: false },
   };
+  const currencyBuckets = new Map<string, typeof totals>();
+  const unknownCurrencyTotals = {
+    cash: { amount: 0, unknown: false },
+    investments: { amount: 0, unknown: false },
+    crypto: { amount: 0, unknown: false },
+    credit: { amount: 0, unknown: false },
+  };
+  let hasUnknownCurrency = false;
 
   for (const account of accounts ?? []) {
     const rawBalance = account?.current_balance;
@@ -623,22 +650,68 @@ export function summarizeAccounts(
             : null;
     if (!bucket) continue;
     supported = true;
+    const currency = normalizeCurrency(account?.currency);
+    const currencyTotals = currency
+      ? (currencyBuckets.get(currency) ?? (() => {
+        const fresh = {
+          cash: { amount: 0, unknown: false },
+          investments: { amount: 0, unknown: false },
+          crypto: { amount: 0, unknown: false },
+          credit: { amount: 0, unknown: false },
+        };
+        currencyBuckets.set(currency, fresh);
+        return fresh;
+      })())
+      : unknownCurrencyTotals;
+    if (!currency) hasUnknownCurrency = true;
+    const currencyBucket = isCredit || isLoan ? currencyTotals.credit
+      : isCrypto ? currencyTotals.crypto
+        : isInvestment ? currencyTotals.investments
+          : accountType === "depository" ? currencyTotals.cash
+            : null;
     // Plaid current_balance is positive for credit-card debt and negative
     // for a credit balance. Loan balances are liabilities and cannot use
     // the credit-card sign convention.
-    if (balance == null || (isLoan && balance < 0)) bucket.unknown = true;
-    else bucket.amount += balance;
+    if (balance == null || (isLoan && balance < 0)) {
+      bucket.unknown = true;
+      if (currencyBucket) currencyBucket.unknown = true;
+    } else {
+      bucket.amount += balance;
+      if (currencyBucket) currencyBucket.amount += balance;
+    }
   }
 
-  const cash = totals.cash.unknown ? null : totals.cash.amount;
-  const investments = totals.investments.unknown ? null : totals.investments.amount;
-  const crypto = totals.crypto.unknown ? null : totals.crypto.amount;
-  const credit = totals.credit.unknown ? null : totals.credit.amount;
-  const netWorth = !configured || !supported || [cash, investments, crypto, credit].some((value) => value == null)
+  const currencies = [...currencyBuckets.keys()].sort();
+  const mixedCurrency = currencies.length > 1 || hasUnknownCurrency;
+  const currency = currencies.length === 1 && !hasUnknownCurrency ? currencies[0] : null;
+  const scalarTotals = currency && currencyBuckets.get(currency)
+    ? currencyBuckets.get(currency)!
+    : totals;
+  const cash = mixedCurrency ? null : scalarTotals.cash.unknown ? null : scalarTotals.cash.amount;
+  const investments = mixedCurrency ? null : scalarTotals.investments.unknown ? null : scalarTotals.investments.amount;
+  const crypto = mixedCurrency ? null : scalarTotals.crypto.unknown ? null : scalarTotals.crypto.amount;
+  const credit = mixedCurrency ? null : scalarTotals.credit.unknown ? null : scalarTotals.credit.amount;
+  const netWorth = !configured || !supported || mixedCurrency || [cash, investments, crypto, credit].some((value) => value == null)
     ? null
     // Credit account balances represent amounts owed: display the bucket as a
     // positive debt amount, but subtract it from net worth.
     : cash! + investments! + crypto! - credit!;
+
+  const currencyTotals = Object.fromEntries([...currencyBuckets.entries()].map(([code, bucket]) => {
+    const bucketCash = bucket.cash.unknown ? null : bucket.cash.amount;
+    const bucketInvestments = bucket.investments.unknown ? null : bucket.investments.amount;
+    const bucketCrypto = bucket.crypto.unknown ? null : bucket.crypto.amount;
+    const bucketCredit = bucket.credit.unknown ? null : bucket.credit.amount;
+    return [code, {
+      cash: bucketCash,
+      investments: bucketInvestments,
+      crypto: bucketCrypto,
+      credit: bucketCredit,
+      netWorth: [bucketCash, bucketInvestments, bucketCrypto, bucketCredit].some((value) => value == null)
+        ? null
+        : bucketCash! + bucketInvestments! + bucketCrypto! - bucketCredit!,
+    }];
+  }));
 
   return {
     configured,
@@ -647,6 +720,10 @@ export function summarizeAccounts(
     crypto,
     credit,
     netWorth,
+    currency,
+    currencies,
+    mixedCurrency,
+    currencyTotals,
   };
 }
 
@@ -673,8 +750,23 @@ export function computeMonthlyAccounting(
   const spendingMap =
     new Map<string, number>();
   const seenTransactionIds = new Set<string>();
+  const accountCurrencyById = new Map<string, string | null>();
+  for (const account of _accounts ?? []) {
+    const currency = normalizeCurrency(account?.currency);
+    if (account?.id) accountCurrencyById.set(String(account.id), currency);
+    if (account?.plaid_account_id) accountCurrencyById.set(String(account.plaid_account_id), currency);
+  }
+  const transactionCurrencies = new Set<string>();
+  let unknownCurrency = false;
 
   for (const tx of transactions ?? []) {
+    if (tx?.account_id == null) {
+      unknownCurrency = true;
+    } else {
+      const currency = accountCurrencyById.get(String(tx.account_id));
+      if (currency) transactionCurrencies.add(currency);
+      else unknownCurrency = true;
+    }
     const providerId = typeof tx?.plaid_transaction_id === "string"
       ? tx.plaid_transaction_id.trim()
       : "";
@@ -870,6 +962,10 @@ export function computeMonthlyAccounting(
     investmentActivity,
     pendingSpending,
     spendingByCategory,
+    currency: transactionCurrencies.size === 1 && !unknownCurrency ? [...transactionCurrencies][0] : null,
+    mixedCurrency: transactionCurrencies.size > 1 || (transactionCurrencies.size > 0 && unknownCurrency),
+    unknownCurrency,
+    currencySafe: transactionCurrencies.size <= 1 && !unknownCurrency,
   };
 }
 

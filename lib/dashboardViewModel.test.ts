@@ -13,6 +13,7 @@ function account(overrides: Partial<DashboardAccount>): DashboardAccount {
     account_subtype: "brokerage",
     current_balance: 500,
     available_balance: 400,
+    currency: "USD",
     plaid_account_id: "individual-id",
     ...overrides,
   };
@@ -177,7 +178,7 @@ describe("cash-aware portfolio positions", () => {
 
   it("adds configured profile balances separately even when account names appear identical", () => {
     const view = buildDashboardViewModel({
-      accounts: [account({ account_type: "depository", account_subtype: "checking", account_name: "Fictional checking", current_balance: 100 })],
+      accounts: [account({ account_type: "depository", account_subtype: "checking", account_name: "Fictional checking", current_balance: 100, currency: "USD" })],
       monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
       profile: { ...STARTER_FINANCIAL_PROFILE, financialAccounts: [{ name: "Fictional checking", accountType: "depository", subtype: "checking", balance: 100, balanceSource: "manual" }] },
     });
@@ -185,6 +186,67 @@ describe("cash-aware portfolio positions", () => {
     expect(view.overallPosition.profileAccountNetWorth).toBe(100);
     expect(view.overallPosition.netWorth).toBe(200);
     expect(view.overallPosition.netWorthComplete).toBe(true);
+  });
+
+  it("does not combine a connected balance with a profile balance when connected currency is missing", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({ account_type: "depository", current_balance: 100, currency: null })],
+      monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
+      profile: { ...STARTER_FINANCIAL_PROFILE, financialAccounts: [{ name: "Savings", accountType: "depository", balance: 100, balanceSource: "manual", currency: "USD" }] },
+    });
+    expect(view.accountSummary.netWorth).toBeNull();
+    expect(view.accountSummary.mixedCurrency).toBe(true);
+  });
+
+  it("keeps mixed-currency portfolio positions unavailable while retaining individual holding currencies", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ id: "usd", plaid_account_id: "usd", currency: "USD", current_balance: 100 }),
+        account({ id: "eur", plaid_account_id: "eur", currency: "EUR", current_balance: 100 }),
+      ],
+      monthTransactions: [], historicalTransactions: [], snapshots: [],
+      holdings: [
+        holding({ id: "usd-holding", plaid_account_id: "usd", currency: "USD", institution_value: 100, cost_basis: 90 }),
+        holding({ id: "eur-holding", plaid_account_id: "eur", currency: "EUR", institution_value: 100, cost_basis: 90 }),
+      ],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+    expect(view.financialPosition.equities.mixedCurrency).toBe(true);
+    expect(view.financialPosition.equities.currentValue).toBeNull();
+    expect(view.financialPosition.equities.investedValue).toBeNull();
+  });
+
+  it("uses the associated account currency for snapshots", () => {
+    const series = buildPortfolioGrowthSeries([
+      snapshot({ plaid_account_id: "usd", securities_value: 100 }),
+      snapshot({ plaid_account_id: "eur", securities_value: 200 }),
+    ], [
+      account({ plaid_account_id: "usd", currency: "USD" }),
+      account({ plaid_account_id: "eur", currency: "EUR" }),
+    ]);
+    expect(series.observations).toEqual([]);
+    expect(series.mixedCurrency).toBe(true);
+    expect(series.changeSinceFirstSnapshot).toBeNull();
+  });
+
+  it("does not calculate mixed-currency investment performance", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ plaid_account_id: "usd", currency: "USD" }),
+        account({ plaid_account_id: "eur", currency: "EUR" }),
+      ],
+      monthTransactions: [], historicalTransactions: [], snapshots: [
+        snapshot({ plaid_account_id: "usd", securities_value: 90 }),
+        snapshot({ plaid_account_id: "eur", securities_value: 90 }),
+      ],
+      holdings: [
+        holding({ plaid_account_id: "usd", currency: "USD", institution_value: 100, cost_basis: 90 }),
+        holding({ id: "eur-holding", plaid_account_id: "eur", currency: "EUR", institution_value: 100, cost_basis: 90 }),
+      ],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+    expect(view.investmentPerformance.totalReturn).toBeNull();
+    expect(view.investmentPerformance.totalReturnPercent).toBeNull();
   });
 
   it("does not add legacy manual balances on top of an explicitly empty account list", () => {
@@ -262,7 +324,7 @@ describe("cash-aware portfolio positions", () => {
     });
     expect(view.monthly.spending).toBe(30);
     expect(view.monthly.pendingSpending).toBe(0);
-    expect(view.monthlyHistory.at(-1)?.spending).toBe(30);
+    expect(view.monthlyHistory.at(-1)).toMatchObject({ spending: 0, currencySafe: false });
   });
 
   it("uses a profile's category targets for the budget usage calculation", () => {
@@ -271,7 +333,7 @@ describe("cash-aware portfolio positions", () => {
       profile: { ...STARTER_FINANCIAL_PROFILE, budget: { expenses: [{ name: "Food", category: "food", amount: 500 }] } },
       now: new Date("2026-10-05T12:00:00.000Z"),
     });
-    expect(view.spendingBudgetUsage).toBe(50);
+    expect(view.spendingBudgetUsage).toBeNull();
   });
 
   it("does not include Robinhood Individual CUR:USD in Equities invested value", () => {
@@ -351,6 +413,91 @@ describe("cash-aware portfolio positions", () => {
     expect(view.financialPlan.bills.monthlyObligations.total).toBe(898);
     expect(view.monthlyExpenseEstimate.estimatedMonthlyExpenses).toBeNull();
     expect(view.financialPlan.estimatedRecurringCashFlow).toBeNull();
+  });
+
+  it("suppresses derived transaction calculations when transaction currency is unknown", () => {
+    const view = buildDashboardViewModel({
+      accounts: [],
+      monthTransactions: [{ id: "unknown", date: "2026-10-03", name: "Groceries", merchant_name: null, amount: 250, category: "food", pending: false, plaid_transaction_id: null, account_id: null }],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: { ...STARTER_FINANCIAL_PROFILE, budget: { monthlySpendingTarget: 500 } },
+      now: new Date("2026-10-05T12:00:00.000Z"),
+    });
+    expect(view.monthly.currencySafe).toBe(false);
+    expect(view.financialPlanning.budgetUtilization).toBeNull();
+    expect(view.budgetLines).toEqual([]);
+    expect(view.spendingBudgetUsage).toBeNull();
+    expect(view.netCashFlow).toBeNull();
+    expect(view.projectedMonthEndSpending).toBeNull();
+  });
+
+  it("suppresses derived transaction calculations when transaction currencies are mixed", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ id: "usd", currency: "USD", account_type: "depository", current_balance: 100 }),
+        account({ id: "eur", currency: "EUR", account_type: "depository", current_balance: 100 }),
+      ],
+      monthTransactions: [
+        { id: "usd-tx", date: "2026-10-03", name: "USD groceries", merchant_name: null, amount: 25, category: "food", pending: false, plaid_transaction_id: null, account_id: "usd" },
+        { id: "eur-tx", date: "2026-10-04", name: "EUR groceries", merchant_name: null, amount: 25, category: "food", pending: false, plaid_transaction_id: null, account_id: "eur" },
+      ],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: { ...STARTER_FINANCIAL_PROFILE, budget: { monthlySpendingTarget: 500 } },
+      now: new Date("2026-10-05T12:00:00.000Z"),
+    });
+    expect(view.monthly.currencySafe).toBe(false);
+    expect(view.financialPlanning.budgetUtilization).toBeNull();
+    expect(view.spendingBudgetUsage).toBeNull();
+    expect(view.netCashFlow).toBeNull();
+  });
+
+  it("keeps EUR portfolio growth currency-specific when the profile currency is USD", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({ plaid_account_id: "eur-account", currency: "EUR", current_balance: 100 })],
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [
+        snapshot({ plaid_account_id: "eur-account", snapshot_date: "2026-01-01", securities_value: 100 }),
+        snapshot({ plaid_account_id: "eur-account", snapshot_date: "2026-02-01", securities_value: 120 }),
+      ],
+      profile: { ...STARTER_FINANCIAL_PROFILE, currency: "USD" },
+    });
+    expect(view.portfolioGrowth.currency).toBe("EUR");
+    expect(view.portfolioGrowth.changeSinceFirstSnapshot).toBe(20);
+  });
+
+  it("does not combine HYSA USD with equities cash EUR", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ institution_name: "Robinhood", account_name: "Brokerage", account_type: "investment", account_subtype: "brokerage", currency: "EUR", current_balance: 100 }),
+        account({ institution_name: "Example Bank", account_name: "HYSA reserve", account_type: "depository", account_subtype: "savings", currency: "USD", current_balance: 50 }),
+      ],
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+    expect(view.financialPosition.hysa.currentBalance).toBeNull();
+    expect(view.financialPosition.hysa.currency).toBeNull();
+  });
+
+  it("keeps portfolio totals unavailable when account currency is missing", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({ plaid_account_id: "unknown-account", currency: null, current_balance: 100 })],
+      monthTransactions: [],
+      historicalTransactions: [],
+      holdings: [],
+      snapshots: [],
+      profile: { ...STARTER_FINANCIAL_PROFILE, currency: "USD" },
+    });
+    expect(view.financialPosition.equities.currentValue).toBeNull();
+    expect(view.financialPosition.equities.currency).toBeNull();
   });
 });
 

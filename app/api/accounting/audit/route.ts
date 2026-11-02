@@ -160,7 +160,7 @@ export async function GET(request: Request) {
     }
 
     // CATEGORY TOTALS from monthly.spendingByCategory
-    const categoryTotals = monthly.spendingByCategory;
+    const categoryTotals = monthly.currencySafe ? monthly.spendingByCategory : [];
 
     // SANITY CHECKS
     const numFinalIncome = incomeTxs.length;
@@ -170,7 +170,7 @@ export async function GET(request: Request) {
     const numCCPayments = excludedTxs.filter((t) => t.excluded_reason === "credit_card_payment").length;
     const numRefunds = excludedTxs.filter((t) => t.excluded_reason === "refund").length;
 
-    const computedNet = (monthly.income || 0) - (monthly.spending || 0);
+    const computedNet = monthly.currencySafe ? monthly.income - monthly.spending : null;
 
     return NextResponse.json({
       account_summary: {
@@ -184,13 +184,15 @@ export async function GET(request: Request) {
         },
       },
       monthly_accounting: {
-        income: monthly.income,
-        spending: monthly.spending,
+        currency: monthly.currency,
+        currency_safe: monthly.currencySafe,
+        income: monthly.currencySafe ? monthly.income : null,
+        spending: monthly.currencySafe ? monthly.spending : null,
         net: computedNet,
-        pending_spending: monthly.pendingSpending,
-        credit_card_payments: monthly.creditCardPayments,
-        refunds: monthly.refunds,
-        transfers: monthly.transfers,
+        pending_spending: monthly.currencySafe ? monthly.pendingSpending : null,
+        credit_card_payments: monthly.currencySafe ? monthly.creditCardPayments : null,
+        refunds: monthly.currencySafe ? monthly.refunds : null,
+        transfers: monthly.currencySafe ? monthly.transfers : null,
       },
       income_transactions: incomeTxs,
       spending_transactions: spendingTxs,

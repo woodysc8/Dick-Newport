@@ -7,6 +7,7 @@ export interface DashboardAccount {
   account_subtype: string | null;
   current_balance: number | string | null;
   available_balance: number | string | null;
+  currency?: string | null;
   plaid_account_id?: string | null;
   plaid_item_id?: string | null;
 }

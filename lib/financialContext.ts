@@ -32,6 +32,7 @@ export type FinancialContext = {
     mask: string | null;
     balance: number | string | null;
     availableBalance: number | string | null;
+    currency: string | null;
     isInvestment: boolean;
   }>;
   investments: {
@@ -43,20 +44,24 @@ export type FinancialContext = {
       price: number | string | null;
       value: number | string | null;
       costBasis: number | string | null;
+      currency: string | null;
     }>;
     snapshots?: Array<{
       date: string;
       portfolioValue: number | string;
       createdAt: string;
+      currency: string | null;
     }>;
   };
   monthly: {
-    income: number;
-    grossSpending: number;
-    netPersonalSpending: number;
-    refunds: number;
-    transfers: number;
-    creditCardPayments: number;
+    currency: string | null;
+    currencySafe: boolean;
+    income: number | null;
+    grossSpending: number | null;
+    netPersonalSpending: number | null;
+    refunds: number | null;
+    transfers: number | null;
+    creditCardPayments: number | null;
     categories: Record<string, number>;
   };
   recentTransactions: Array<{
@@ -100,7 +105,7 @@ export async function getFinancialContext(
   const transactionLimit = Math.min(Math.max(options.transactionLimit ?? 50, 1), 200);
   const accountsQuery = supabase
     .from("accounts")
-    .select("institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, plaid_account_id, plaid_item_id")
+    .select("institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, plaid_item_id")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
   const monthlyTransactionsQuery = supabase
@@ -118,7 +123,7 @@ export async function getFinancialContext(
     .limit(transactionLimit);
   const holdingsQuery = supabase
     .from("investment_holdings")
-    .select("id, plaid_account_id, security_id, ticker_symbol, security_name, quantity, institution_price, institution_value, cost_basis")
+    .select("id, plaid_account_id, security_id, ticker_symbol, security_name, quantity, institution_price, institution_value, cost_basis, currency, iso_currency_code")
     .eq("user_id", userId)
     .order("institution_value", { ascending: false });
   const [accountsResult, monthlyTransactionsResult, recentTransactionsResult, holdingsResult] = await Promise.all([
@@ -138,7 +143,9 @@ export async function getFinancialContext(
   const holdings = (holdingsResult.data ?? []) as InvestmentHolding[];
   const accountSummary = accounting.summarizeAccounts(accounts);
   const monthly = accounting.computeMonthlyAccounting(monthlyTransactions, accounts);
-  const categories = Object.fromEntries(monthly.spendingByCategory.map(({ category, total }) => [category, total]));
+  const categories = monthly.currencySafe
+    ? Object.fromEntries(monthly.spendingByCategory.map(({ category, total }) => [category, total]))
+    : {};
 
   const context: FinancialContext = {
     generatedAt: new Date().toISOString(),
@@ -156,6 +163,7 @@ export async function getFinancialContext(
       mask: account.mask,
       balance: account.current_balance,
       availableBalance: account.available_balance,
+      currency: account.currency ?? null,
       isInvestment: isDashboardInvestmentAccount(account),
     })),
     investments: {
@@ -167,15 +175,18 @@ export async function getFinancialContext(
         price: holding.institution_price,
         value: holding.institution_value,
         costBasis: holding.cost_basis,
+        currency: holding.currency ?? holding.iso_currency_code ?? null,
       })),
     },
     monthly: {
-      income: monthly.income,
-      grossSpending: monthly.grossSpending,
-      netPersonalSpending: monthly.spending,
-      refunds: monthly.refunds,
-      transfers: monthly.transfers,
-      creditCardPayments: monthly.creditCardPayments,
+      currency: monthly.currency,
+      currencySafe: monthly.currencySafe,
+      income: monthly.currencySafe ? monthly.income : null,
+      grossSpending: monthly.currencySafe ? monthly.grossSpending : null,
+      netPersonalSpending: monthly.currencySafe ? monthly.spending : null,
+      refunds: monthly.currencySafe ? monthly.refunds : null,
+      transfers: monthly.currencySafe ? monthly.transfers : null,
+      creditCardPayments: monthly.currencySafe ? monthly.creditCardPayments : null,
       categories,
     },
     recentTransactions: recentTransactions.map((transaction) => ({
@@ -208,20 +219,21 @@ export async function getFinancialContext(
   if (options.includeSnapshots) {
     const { data: snapshots, error } = await supabase
       .from("investment_snapshots")
-      .select("snapshot_date, portfolio_value, created_at")
+      .select("snapshot_date, portfolio_value, plaid_account_id, created_at")
       .eq("user_id", userId)
       .order("snapshot_date", { ascending: false });
 
     if (error) {
       context.freshness.sourceStatuses.investmentSnapshots = "unavailable";
     } else {
-      context.investments.snapshots = ((snapshots ?? []) as Pick<InvestmentSnapshot, "snapshot_date" | "portfolio_value" | "created_at">[]).flatMap((snapshot) => (
+      context.investments.snapshots = ((snapshots ?? []) as Pick<InvestmentSnapshot, "snapshot_date" | "portfolio_value" | "plaid_account_id" | "created_at">[]).flatMap((snapshot) => (
         snapshot.portfolio_value == null
           ? []
           : [{
               date: snapshot.snapshot_date,
               portfolioValue: snapshot.portfolio_value,
               createdAt: snapshot.created_at,
+              currency: accounts.find((account) => account.plaid_account_id === snapshot.plaid_account_id)?.currency ?? null,
             }]
       ));
       context.freshness.sourceStatuses.investmentSnapshots = "available";

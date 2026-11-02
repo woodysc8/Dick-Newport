@@ -33,9 +33,12 @@ export type PortfolioHolding = InvestmentHolding & {
 
 export type PortfolioPosition = {
   accounts: AccountWithClass[];
-  currentValue: number;
-  investedValue: number;
-  cashValue: number;
+  currentValue: number | null;
+  investedValue: number | null;
+  cashValue: number | null;
+  currency: string | null;
+  currencies: string[];
+  mixedCurrency: boolean;
   holdings: PortfolioHolding[];
   totalGain: number | null;
   totalGainPercent: number | null;
@@ -51,6 +54,8 @@ export type PortfolioGrowthSeries = {
   earliestValue: number | null;
   latestValue: number | null;
   changeSinceFirstSnapshot: number | null;
+  currency: string | null;
+  mixedCurrency: boolean;
 };
 
 export type DashboardProperty = PropertyProfile & {
@@ -80,7 +85,7 @@ export type DashboardViewModel = {
   savingsRate: number | null;
   spendingBudgetUsage: number | null;
   projectedMonthEndSpending: number | null;
-  monthlyHistory: Array<{ label: string; income: number; spending: number }>;
+  monthlyHistory: Array<{ label: string; income: number; spending: number; currencySafe: boolean }>;
   investmentPerformance: {
     totalReturn: number | null;
     totalReturnPercent: number | null;
@@ -103,7 +108,8 @@ export type DashboardViewModel = {
     retirement: PortfolioPosition;
     hysa: {
       accounts: AccountWithClass[];
-      currentBalance: number;
+      currentBalance: number | null;
+      currency: string | null;
       configuredApy: number | null;
     };
   };
@@ -143,18 +149,33 @@ function monthlyHistory(transactions: RecentTransaction[], accounts: DashboardAc
       { includePending }
     );
 
-    return { label: monthLabel(date), income: monthly.income, spending: monthly.spending };
+    return { label: monthLabel(date), income: monthly.currencySafe ? monthly.income : 0, spending: monthly.currencySafe ? monthly.spending : 0, currencySafe: monthly.currencySafe };
   });
 }
 
-function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: InvestmentSnapshot[], now: Date) {
+function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: InvestmentSnapshot[], accounts: DashboardAccount[], now: Date) {
+  const accountCurrencyByPlaidId = new Map(accounts.map((account) => [account.plaid_account_id, normalizedCurrency(account.currency)]));
+  const currencies = new Set<string>();
+  let unknownCurrency = false;
+  for (const holding of holdings) {
+    const currency = normalizedCurrency(holding.currency ?? holding.iso_currency_code) ?? accountCurrencyByPlaidId.get(holding.plaid_account_id);
+    if (currency) currencies.add(currency);
+    else unknownCurrency = true;
+  }
+  for (const snapshot of snapshots) {
+    const currency = accountCurrencyByPlaidId.get(snapshot.plaid_account_id);
+    if (currency) currencies.add(currency);
+    else unknownCurrency = true;
+  }
+  const mixedCurrency = currencies.size > 1 || unknownCurrency;
+  const unavailable = mixedCurrency || (currencies.size === 0 && unknownCurrency);
   const reliableHoldings = holdings.length > 0 && holdings.every((holding) =>
     numberOrNull(holding.institution_value) != null && (numberOrNull(holding.cost_basis) ?? 0) > 0
   );
-  const holdingsValue = reliableHoldings
+  const holdingsValue = unavailable ? null : reliableHoldings
     ? holdings.reduce((total, holding) => total + (numberOrNull(holding.institution_value) ?? 0), 0)
     : null;
-  const costBasis = reliableHoldings
+  const costBasis = unavailable ? null : reliableHoldings
     ? holdings.reduce((total, holding) => total + (numberOrNull(holding.cost_basis) ?? 0), 0)
     : null;
   const totalReturn = holdingsValue != null && costBasis != null ? holdingsValue - costBasis : null;
@@ -204,6 +225,11 @@ function addKnownTotals(left: number | null, right: number | null): number | nul
   return left == null || right == null ? null : left + right;
 }
 
+function normalizedCurrency(value: unknown): string | null {
+  const currency = String(value ?? "").trim().toUpperCase();
+  return /^[A-Z]{3}$/.test(currency) ? currency : null;
+}
+
 function combineAccountSummaries(
   connected: ReturnType<typeof accounting.summarizeAccounts>,
   profile: ProfileAccountBalanceSummary
@@ -217,6 +243,27 @@ function combineAccountSummaries(
       crypto: null,
       credit: profile.liabilities,
       netWorth: profile.netWorth,
+      currency: profile.currency,
+      currencies: profile.currencies,
+      mixedCurrency: profile.mixedCurrency,
+      currencyTotals: {},
+    };
+  }
+  const currencies = new Set([...connected.currencies, ...profile.currencies]);
+  const compatible = !connected.mixedCurrency && !profile.mixedCurrency &&
+    connected.currency != null && profile.currency != null && connected.currency === profile.currency;
+  if (!compatible) {
+    return {
+      configured: true,
+      cash: null,
+      investments: null,
+      crypto: null,
+      credit: null,
+      netWorth: null,
+      currency: null,
+      currencies: [...currencies].sort(),
+      mixedCurrency: true,
+      currencyTotals: {},
     };
   }
   return {
@@ -226,6 +273,10 @@ function combineAccountSummaries(
     crypto: connected.crypto,
     credit: addKnownTotals(connected.credit, profile.liabilities),
     netWorth: connected.netWorth == null || profile.netWorth == null ? null : connected.netWorth + profile.netWorth,
+    currency: connected.currency ?? profile.currency,
+    currencies: [...currencies].sort(),
+    mixedCurrency: false,
+    currencyTotals: connected.currencyTotals,
   };
 }
 
@@ -252,9 +303,14 @@ export function buildPortfolioGrowthSeries(
       .filter((id): id is string => Boolean(id))
   );
   const valuesByDate = new Map<string, Map<string, number>>();
+  const currencies = new Set<string>();
+  let unknownCurrency = false;
 
   for (const snapshot of snapshots) {
     if (!eligibleAccountIds.has(snapshot.plaid_account_id)) continue;
+    const accountCurrency = normalizedCurrency(accounts.find((account) => account.plaid_account_id === snapshot.plaid_account_id)?.currency);
+    if (accountCurrency) currencies.add(accountCurrency);
+    else unknownCurrency = true;
     const value = numberOrNull(snapshot.securities_value);
     if (value == null) continue;
     const accountValues = valuesByDate.get(snapshot.snapshot_date) ?? new Map<string, number>();
@@ -270,12 +326,15 @@ export function buildPortfolioGrowthSeries(
     }));
   const earliestValue = observations[0]?.value ?? null;
   const latestValue = observations.at(-1)?.value ?? null;
+  const mixedCurrency = currencies.size > 1 || unknownCurrency;
 
   return {
-    observations,
-    earliestValue,
-    latestValue,
-    changeSinceFirstSnapshot: earliestValue != null && latestValue != null ? latestValue - earliestValue : null,
+    observations: mixedCurrency ? [] : observations,
+    earliestValue: mixedCurrency ? null : earliestValue,
+    latestValue: mixedCurrency ? null : latestValue,
+    changeSinceFirstSnapshot: mixedCurrency ? null : earliestValue != null && latestValue != null ? latestValue - earliestValue : null,
+    currency: currencies.size === 1 && !unknownCurrency ? [...currencies][0] : null,
+    mixedCurrency,
   };
 }
 
@@ -289,17 +348,33 @@ function buildPortfolioPosition(
     purposeAccounts.map((account) => account.plaid_account_id).filter((id): id is string => Boolean(id))
   );
   const purposeHoldings = holdings.filter((holding) => holding.plaid_account_id != null && purposePlaidIds.has(holding.plaid_account_id) && !isCashHolding(holding));
-  const currentValue = sumBalances(purposeAccounts);
-  const investedValue = purposeHoldings.reduce((total, holding) => total + numericBalance(holding.institution_value), 0);
+  const accountCurrencyByPlaidId = new Map(purposeAccounts.map((account) => [account.plaid_account_id, normalizedCurrency(account.currency)]));
+  const currencies = new Set<string>();
+  let unknownCurrency = false;
+  for (const account of purposeAccounts) {
+    const currency = normalizedCurrency(account.currency);
+    if (currency) currencies.add(currency);
+    else unknownCurrency = true;
+  }
+  for (const holding of purposeHoldings) {
+    const currency = normalizedCurrency(holding.currency ?? holding.iso_currency_code) ?? accountCurrencyByPlaidId.get(holding.plaid_account_id);
+    if (currency) currencies.add(currency);
+    else unknownCurrency = true;
+  }
+  const mixedCurrency = currencies.size > 1 || unknownCurrency;
+  const currency = currencies.size === 1 && !unknownCurrency ? [...currencies][0] : null;
+  const currentValue = mixedCurrency ? null : sumBalances(purposeAccounts);
+  const investedValue = mixedCurrency ? null : purposeHoldings.reduce((total, holding) => total + numericBalance(holding.institution_value), 0);
   const holdingsWithMetrics = purposeHoldings.map((holding) => {
     const value = numberOrNull(holding.institution_value);
     const costBasis = numberOrNull(holding.cost_basis);
     const gain = value != null && costBasis != null ? value - costBasis : null;
     return {
       ...holding,
+      currency: holding.currency ?? holding.iso_currency_code ?? accountCurrencyByPlaidId.get(holding.plaid_account_id) ?? null,
       gain,
       gainPercent: gain != null && costBasis != null && costBasis > 0 ? (gain / costBasis) * 100 : null,
-      allocationPercent: investedValue > 0 && value != null ? (value / investedValue) * 100 : null,
+      allocationPercent: investedValue != null && investedValue > 0 && value != null ? (value / investedValue) * 100 : null,
     };
   });
   const knownGains = holdingsWithMetrics.filter((holding) => holding.gain != null);
@@ -310,10 +385,13 @@ function buildPortfolioPosition(
     accounts: purposeAccounts,
     currentValue,
     investedValue,
-    cashValue: Math.max(0, currentValue - investedValue),
+    cashValue: currentValue != null && investedValue != null ? Math.max(0, currentValue - investedValue) : null,
     holdings: holdingsWithMetrics,
-    totalGain,
-    totalGainPercent: totalGain != null && totalCostBasis > 0 ? (totalGain / totalCostBasis) * 100 : null,
+    totalGain: mixedCurrency ? null : totalGain,
+    totalGainPercent: mixedCurrency ? null : totalGain != null && totalCostBasis > 0 ? (totalGain / totalCostBasis) * 100 : null,
+    currency,
+    currencies: [...currencies].sort(),
+    mixedCurrency,
   };
 }
 
@@ -349,24 +427,38 @@ export function buildDashboardViewModel({
   const accountSummary = combineAccountSummaries(connectedAccountSummary, profileAccountBalances);
   const includePending = profile.budgetingPreferences?.includePendingTransactions;
   const monthly = accounting.computeMonthlyAccounting(monthTransactions, accounts, { includePending });
-  const financialPlanning = calculateFinancialPlanning(profile, { actualMonthlySpending: monthly.spending });
+  const financialPlanning = calculateFinancialPlanning(profile, {
+    actualMonthlySpending: monthly.currencySafe ? monthly.spending : undefined,
+  });
   const cashAccounts = accountsWithClass.filter((account) => account.accountClass === "cash");
   const creditAccounts = accountsWithClass.filter((account) => account.accountClass === "credit");
   const retirementAccounts = accountsWithClass.filter((account) => account.accountClass === "retirement");
   const taxableInvestmentAccounts = accountsWithClass.filter((account) => account.accountClass === "investment");
   const retirementAssets = accounting.summarizeAccounts(retirementAccounts).investments;
-  const netCashFlow = monthly.income > 0 ? monthly.income - monthly.spending : null;
+  const netCashFlow = monthly.currencySafe && monthly.income > 0 ? monthly.income - monthly.spending : null;
   const savingsRate = netCashFlow != null && monthly.income > 0 ? (netCashFlow / monthly.income) * 100 : null;
   const dayOfMonth = now.getDate();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const projectedMonthEndSpending = dayOfMonth >= 2 ? (monthly.spending / dayOfMonth) * daysInMonth : null;
+  const projectedMonthEndSpending = monthly.currencySafe && dayOfMonth >= 2 ? (monthly.spending / dayOfMonth) * daysInMonth : null;
   const hysaAccounts = accountsWithClass.filter((account) => getPurpose(account) === "hysa");
   const checkingAccounts = accountsWithClass.filter((account) => getPurpose(account) === "spending");
-  const venmoBalance = accountsWithClass
-    .filter((account) => getPurpose(account) === "venmo")
-    .reduce((total, account) => total + numericBalance(account.current_balance), 0);
   const equitiesPosition = buildPortfolioPosition(accountsWithClass, holdings, "equities");
   const retirementPosition = buildPortfolioPosition(accountsWithClass, holdings, "retirement");
+  const hysaSummary = accounting.summarizeAccounts(hysaAccounts);
+  const canCombineHysaCash = hysaSummary.currency != null &&
+    equitiesPosition.currency != null &&
+    hysaSummary.currency === equitiesPosition.currency &&
+    !hysaSummary.mixedCurrency &&
+    equitiesPosition.cashValue != null;
+  const venmoAccounts = accountsWithClass.filter((account) => getPurpose(account) === "venmo");
+  const venmoCurrencies = new Set(
+    venmoAccounts
+      .map((account) => typeof account.currency === "string" && /^[A-Za-z]{3}$/.test(account.currency) ? account.currency.toUpperCase() : null)
+  );
+  const venmoCurrency = venmoCurrencies.size === 1 && !venmoCurrencies.has(null) ? [...venmoCurrencies][0] : null;
+  const venmoBalance = venmoAccounts.length === 0 || venmoCurrencies.has(null) || venmoCurrencies.size > 1
+    ? venmoAccounts.length === 0 ? 0 : null
+    : venmoAccounts.reduce((total, account) => total + numericBalance(account.current_balance), 0);
   const configuredSpendingTarget = profile.budget?.monthlySpendingTarget ??
     (profile.budget?.expenses?.length ? profile.budget.expenses.reduce((total, line) => total + line.amount, 0) : undefined);
 
@@ -387,7 +479,7 @@ export function buildDashboardViewModel({
     debts: profile.debts ?? [],
     retirementContributionPlans: profile.retirementContributionPlans ?? [],
     goals: profile.goals ?? [],
-    budgetLines: accounting.getDashboardBudgetTotals(monthly.spendingByCategory),
+    budgetLines: monthly.currencySafe ? accounting.getDashboardBudgetTotals(monthly.spendingByCategory) : [],
     accounts: accountsWithClass,
     cashAccounts,
     creditAccounts,
@@ -396,10 +488,10 @@ export function buildDashboardViewModel({
     retirementAssets,
     netCashFlow,
     savingsRate,
-    spendingBudgetUsage: configuredSpendingTarget == null ? null : accounting.getBudgetUsagePercent(configuredSpendingTarget, monthly.spending),
+    spendingBudgetUsage: configuredSpendingTarget == null || !monthly.currencySafe ? null : accounting.getBudgetUsagePercent(configuredSpendingTarget, monthly.spending),
     projectedMonthEndSpending,
     monthlyHistory: monthlyHistory(historicalTransactions, accounts, now, includePending),
-    investmentPerformance: getInvestmentPerformance(holdings, snapshots, now),
+    investmentPerformance: getInvestmentPerformance(holdings, snapshots, accounts, now),
     portfolioGrowth: buildPortfolioGrowthSeries(snapshots, accounts),
     overallPosition: {
       netWorth: accountSummary.netWorth,
@@ -414,7 +506,12 @@ export function buildDashboardViewModel({
       retirement: retirementPosition,
       hysa: {
         accounts: hysaAccounts,
-        currentBalance: sumBalances(hysaAccounts) + equitiesPosition.cashValue,
+        currentBalance: hysaAccounts.length === 0
+          ? equitiesPosition.cashValue
+          : canCombineHysaCash
+            ? (hysaSummary.cash ?? 0) + equitiesPosition.cashValue!
+            : null,
+        currency: hysaAccounts.length === 0 ? equitiesPosition.currency : canCombineHysaCash ? hysaSummary.currency : null,
         configuredApy: profile.bills?.intendedApy ?? null,
       },
     },
@@ -422,6 +519,8 @@ export function buildDashboardViewModel({
       asOf: now,
       transactions: weeklyTransactions,
       venmoBalance,
+      venmoCurrency,
+      accounts,
       profile,
     }),
     financialPlan: {

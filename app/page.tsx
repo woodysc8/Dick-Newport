@@ -81,6 +81,10 @@ function accountName(account: DashboardAccount): string {
   return `${account.institution_name ?? "Unknown institution"} · ${account.account_name ?? "Unnamed account"}${account.mask ? ` ••••${account.mask}` : ""}`;
 }
 
+function accountCurrency(account: DashboardAccount | undefined): string | null {
+  return account?.currency && /^[A-Z]{3}$/.test(account.currency) ? account.currency : null;
+}
+
 function transactionCategory(transaction: RecentTransaction): string {
   return Array.isArray(transaction.category) ? transaction.category.join(" > ") : transaction.category ?? "Uncategorized";
 }
@@ -141,7 +145,8 @@ function ProgressBar({ value, className = "" }: { value: number; className?: str
   );
 }
 
-function PositionCard({ label, description, position, currency = "USD", accent = false, children }: { label: string; description: string; position: PortfolioPosition; currency?: string; accent?: boolean; children?: ReactNode }) {
+function PositionCard({ label, description, position, accent = false, children }: { label: string; description: string; position: PortfolioPosition; accent?: boolean; children?: ReactNode }) {
+  const aggregate = (value: number | null) => position.mixedCurrency || !position.currency ? "Unavailable" : money(value, position.currency);
   return (
     <Panel className={accent ? "border-[var(--accent)]" : ""}>
       <div className="flex items-start justify-between gap-4">
@@ -152,15 +157,15 @@ function PositionCard({ label, description, position, currency = "USD", accent =
         <span className="text-xs font-medium text-[var(--text-muted)]">{position.accounts.length} account{position.accounts.length === 1 ? "" : "s"}</span>
       </div>
       <p className="mt-7 text-xs text-[var(--text-muted)]">Total value</p>
-      <p className="mt-1 text-3xl font-semibold tracking-tight text-[var(--text)]">{money(position.currentValue, currency)}</p>
+      <p className="mt-1 text-3xl font-semibold tracking-tight text-[var(--text)]">{aggregate(position.currentValue)}</p>
       <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[var(--border)] pt-4">
-        <Metric label="Invested" value={money(position.investedValue, currency)} />
-        <Metric label="Cash" value={money(position.cashValue, currency)} />
+        <Metric label="Invested" value={aggregate(position.investedValue)} />
+        <Metric label="Cash" value={aggregate(position.cashValue)} />
       </div>
       <div className="mt-5 flex items-center justify-between text-sm">
         <span className="text-[var(--text-muted)]">Gains / losses</span>
         <span className={position.totalGain == null ? "text-[var(--text-muted)]" : position.totalGain >= 0 ? "font-semibold text-[var(--up)]" : "font-semibold text-[var(--down)]"}>
-          {signedMoney(position.totalGain, currency)} {position.totalGainPercent == null ? "" : `(${percent(position.totalGainPercent)})`}
+          {position.mixedCurrency || !position.currency ? "Unavailable" : signedMoney(position.totalGain, position.currency)} {position.totalGainPercent == null ? "" : `(${percent(position.totalGainPercent)})`}
         </span>
       </div>
       {children}
@@ -168,15 +173,16 @@ function PositionCard({ label, description, position, currency = "USD", accent =
   );
 }
 
-function PortfolioTable({ title, position, currency = "USD" }: { title: string; position: PortfolioPosition; currency?: string }) {
+function PortfolioTable({ title, position }: { title: string; position: PortfolioPosition }) {
+  const aggregate = (value: number | null) => position.mixedCurrency || !position.currency ? "Unavailable" : money(value, position.currency);
   return (
     <Panel>
       <div className="flex items-end justify-between gap-4">
         <div>
           <h3 className="text-base font-semibold text-[var(--text)]">{title}</h3>
-          <p className="mt-1 text-sm text-[var(--text-muted)]">{position.holdings.length} holding{position.holdings.length === 1 ? "" : "s"} · {money(position.investedValue, currency)} invested</p>
+          <p className="mt-1 text-sm text-[var(--text-muted)]">{position.holdings.length} holding{position.holdings.length === 1 ? "" : "s"} · {aggregate(position.investedValue)} invested</p>
         </div>
-        <p className="text-sm font-semibold text-[var(--text)]">{money(position.currentValue, currency)}</p>
+        <p className="text-sm font-semibold text-[var(--text)]">{aggregate(position.currentValue)}</p>
       </div>
       {position.holdings.length === 0 ? (
         <div className="mt-5"><Empty>No holdings are available for this purpose.</Empty></div>
@@ -188,9 +194,9 @@ function PortfolioTable({ title, position, currency = "USD" }: { title: string; 
                 <p className="truncate font-medium text-[var(--text)]">{holding.security_name ?? "Unknown security"}</p>
                 <p className="mt-1 text-xs text-[var(--text-muted)]">{holding.ticker_symbol ?? "Ticker unavailable"} · {holding.quantity == null ? "Shares unavailable" : `${holding.quantity} shares`}</p>
               </div>
-              <div className="sm:text-right"><p className="text-xs text-[var(--text-muted)]">Value</p><p className="font-semibold text-[var(--text)]">{money(holding.institution_value, currency)}</p></div>
+              <div className="sm:text-right"><p className="text-xs text-[var(--text-muted)]">Value</p><p className="font-semibold text-[var(--text)]">{holding.currency ?? holding.iso_currency_code ? money(holding.institution_value, holding.currency ?? holding.iso_currency_code!) : "Unknown currency"}</p></div>
               <div className="sm:text-right"><p className="text-xs text-[var(--text-muted)]">Allocation</p><p className="font-semibold text-[var(--text)]">{percent(holding.allocationPercent)}</p></div>
-              <div className="sm:col-span-3 sm:flex sm:items-center sm:gap-3"><ProgressBar value={holding.allocationPercent ?? 0} className="flex-1" /><span className={holding.gain == null ? "text-xs text-[var(--text-muted)]" : holding.gain >= 0 ? "text-xs text-[var(--up)]" : "text-xs text-[var(--down)]"}>{signedMoney(holding.gain, currency)}</span></div>
+              <div className="sm:col-span-3 sm:flex sm:items-center sm:gap-3"><ProgressBar value={holding.allocationPercent ?? 0} className="flex-1" /><span className={holding.gain == null ? "text-xs text-[var(--text-muted)]" : holding.gain >= 0 ? "text-xs text-[var(--up)]" : "text-xs text-[var(--down)]"}>{holding.currency ?? holding.iso_currency_code ? signedMoney(holding.gain, holding.currency ?? holding.iso_currency_code!) : "Unknown currency"}</span></div>
             </div>
           ))}
         </div>
@@ -199,7 +205,7 @@ function PortfolioTable({ title, position, currency = "USD" }: { title: string; 
   );
 }
 
-function PortfolioGrowthChart({ observations, currency = "USD" }: { observations: { date: string; value: number }[]; currency?: string }) {
+function PortfolioGrowthChart({ observations, currency }: { observations: { date: string; value: number }[]; currency: string }) {
   if (observations.length < 2) {
     return <Empty>Portfolio history will appear as more securities-only snapshots are recorded.</Empty>;
   }
@@ -248,7 +254,7 @@ export default async function Home() {
   const transactionSelect = "id, date, name, merchant_name, amount, category, pending, plaid_transaction_id, account_id";
   const [profileResult, accountsResult, monthResult, historyResult, weeklyResult, recentResult, holdingsResult, snapshotsResult] = await Promise.all([
     supabase.from("profiles").select("financial_profile").eq("id", userId).maybeSingle(),
-    supabase.from("accounts").select("id, institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, plaid_account_id, plaid_item_id").eq("user_id", userId).order("created_at", { ascending: false }),
+    supabase.from("accounts").select("id, institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, plaid_item_id").eq("user_id", userId).order("created_at", { ascending: false }),
     supabase.from("transactions").select(transactionSelect).eq("user_id", userId).gte("date", monthStart).lte("date", monthEnd).order("date", { ascending: false }),
     supabase.from("transactions").select(transactionSelect).eq("user_id", userId).gte("date", historyStart).lte("date", monthEnd).order("date", { ascending: false }),
     supabase.from("transactions").select(transactionSelect).eq("user_id", userId).gte("date", spendingPeriod.start).lte("date", spendingPeriod.end).order("date", { ascending: false }),
@@ -265,7 +271,8 @@ export default async function Home() {
   const normalizedProfile = normalizeFinancialProfile(profile);
   if (!legacyExampleMode && !profile.onboardingCompletedAt) redirect("/onboarding");
   const formatMoney = (value: number | string | null | undefined) => money(value, profile.currency);
-  const formatSignedMoney = (value: number | null) => signedMoney(value, profile.currency);
+  const formatAggregate = (value: number | null, currency: string | null, mixedCurrency: boolean) =>
+    mixedCurrency || !currency ? "Unavailable" : money(value, currency);
 
   const accounts = (accountsResult.data ?? []) as DashboardAccount[];
   const recent = (recentResult.data ?? []) as RecentTransaction[];
@@ -281,12 +288,22 @@ export default async function Home() {
     now,
     profile,
   });
+  const formatWeeklyMoney = (value: number | null) =>
+    value == null ? "Unavailable" : view.weeklySpending.currency ? money(value, view.weeklySpending.currency) : "No currency";
   const dataUnavailable = Boolean(profileResult.error || accountsResult.error || monthResult.error || historyResult.error || weeklyResult.error || recentResult.error || holdingsResult.error || snapshotsResult.error);
   const nextPaycheck = view.financialPlan.nextPaycheck;
-  const weeklyProgress = view.weeklySpending.target != null && view.weeklySpending.target > 0 ? (view.weeklySpending.eligibleSpending / view.weeklySpending.target) * 100 : 0;
+  const weeklyProgress = view.weeklySpending.target != null && view.weeklySpending.target > 0 && view.weeklySpending.eligibleSpending != null ? (view.weeklySpending.eligibleSpending / view.weeklySpending.target) * 100 : 0;
   const rothPlannedTotal = view.financialPlan.rothContributions.reduce((total, contribution) => total + contribution.amount, 0);
   const chartMax = Math.max(...view.monthlyHistory.flatMap((item) => [item.income, item.spending]), 1);
-  const currentInvestedPortfolioValue = view.financialPosition.equities.investedValue + view.financialPosition.retirement.investedValue;
+  const portfolioCurrency = view.financialPosition.equities.currency &&
+    view.financialPosition.equities.currency === view.financialPosition.retirement.currency
+    ? view.financialPosition.equities.currency
+    : null;
+  const currentInvestedPortfolioValue = portfolioCurrency &&
+    view.financialPosition.equities.investedValue != null &&
+    view.financialPosition.retirement.investedValue != null
+    ? view.financialPosition.equities.investedValue + view.financialPosition.retirement.investedValue
+    : null;
 
   return (
     <main className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
@@ -326,13 +343,14 @@ export default async function Home() {
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <Panel>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Net worth</p>
-              <p className="mt-4 text-4xl font-semibold tracking-tight text-[var(--text)]">{formatMoney(view.overallPosition.netWorth)}</p>
+              <p className="mt-4 text-4xl font-semibold tracking-tight text-[var(--text)]">{formatAggregate(view.overallPosition.netWorth, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p>
               <p className="mt-2 text-sm text-[var(--text-muted)]">{view.profileAccountBalances.configured ? "Connected plus configured profile balances" : "Connected balances"}{!view.overallPosition.netWorthComplete ? " · incomplete; one or more balances are unknown or unsupported" : ""}</p>
-              <p className="mt-2 text-xs text-[var(--text-muted)]">Connected: {formatMoney(view.overallPosition.connectedNetWorth)}{view.profileAccountBalances.configured ? ` · Profile accounts: ${formatMoney(view.overallPosition.profileAccountNetWorth)}` : ""}</p>
+              <p className="mt-2 text-xs text-[var(--text-muted)]">Connected: {formatAggregate(view.overallPosition.connectedNetWorth, view.connectedAccountSummary.currency, view.connectedAccountSummary.mixedCurrency)}{view.profileAccountBalances.configured ? ` · Profile accounts: ${formatMoney(view.overallPosition.profileAccountNetWorth)}` : ""}</p>
+              {(!view.accountSummary.currency || view.accountSummary.mixedCurrency) && <p className="mt-2 text-xs text-[var(--text-muted)]">Totals are unavailable because one or more account currencies are mixed or unknown. No conversion is applied.</p>}
             </Panel>
             <Panel>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Checking</p>
-              <p className="mt-4 text-4xl font-semibold tracking-tight text-[var(--text)]">{view.overallPosition.checkingAccounts.length > 0 ? formatMoney(view.overallPosition.checkingBalance) : "Not connected"}</p>
+              <p className="mt-4 text-4xl font-semibold tracking-tight text-[var(--text)]">{view.overallPosition.checkingAccounts.length > 0 ? formatAggregate(view.overallPosition.checkingBalance, view.connectedAccountSummary.currency, view.connectedAccountSummary.mixedCurrency) : "Not connected"}</p>
               <p className="mt-2 text-sm text-[var(--text-muted)]">Accounts classified as checking · reserve accounts are separate</p>
             </Panel>
           </div>
@@ -385,15 +403,15 @@ export default async function Home() {
         <section className="mt-10">
           <SectionHeader eyebrow="Assets and investments" title="Connected financial position" detail="Connected account balances and holdings are shown separately from profile-entered properties, accounts, and debts." />
           <div className="mt-5 grid gap-4 lg:grid-cols-3">
-            <PositionCard label="Investments" description="Taxable investment accounts classified from account metadata" position={view.financialPosition.equities} currency={profile.currency}>
+            <PositionCard label="Investments" description="Taxable investment accounts classified from account metadata" position={view.financialPosition.equities}>
               <p className="mt-5 text-xs text-[var(--text-muted)]">Flexible invested money · holdings below</p>
             </PositionCard>
-            <PositionCard label="Retirement" description="Retirement accounts classified from account metadata" position={view.financialPosition.retirement} currency={profile.currency} accent>
+            <PositionCard label="Retirement" description="Retirement accounts classified from account metadata" position={view.financialPosition.retirement} accent>
               {profile.roth ? <div className="mt-5 border-t border-[var(--border)] pt-4"><div className="flex justify-between text-xs"><span className="text-[var(--text-muted)]">Planned contribution amount remaining</span><span className="font-semibold text-[var(--text)]">{formatMoney(view.financialPlan.rothRemaining)}</span></div><p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Progress against actual contribution history is unavailable. Scheduled amount: {formatMoney(rothPlannedTotal)}</p></div> : <p className="mt-5 border-t border-[var(--border)] pt-4 text-xs leading-5 text-[var(--text-muted)]">No retirement contribution schedule has been entered.</p>}
             </PositionCard>
             <Panel>
               <div className="flex items-start justify-between gap-4"><div><h3 className="text-base font-semibold">HYSA</h3><p className="mt-1 text-sm text-[var(--text-muted)]">Bills and cash-reserve bucket</p></div><span className="text-xs font-medium text-[var(--text-muted)]">{view.financialPosition.hysa.accounts.length} account{view.financialPosition.hysa.accounts.length === 1 ? "" : "s"}</span></div>
-              <p className="mt-7 text-3xl font-semibold tracking-tight">{view.financialPosition.hysa.accounts.length > 0 ? formatMoney(view.financialPosition.hysa.currentBalance) : "Not connected"}</p>
+              <p className="mt-7 text-3xl font-semibold tracking-tight">{view.financialPosition.hysa.accounts.length > 0 ? (view.financialPosition.hysa.currentBalance == null || !view.financialPosition.hysa.currency ? "Unavailable" : money(view.financialPosition.hysa.currentBalance, view.financialPosition.hysa.currency)) : "Not connected"}</p>
               <div className="mt-6 grid grid-cols-2 gap-4 border-t border-[var(--border)] pt-4"><Metric label="Monthly bills" value={formatMoney(view.financialPlan.bills.monthlyObligations.total)} /><Metric label="Per paycheck" value={formatMoney(view.financialPlan.bills.perPaycheckAllocation)} /></div>
               <div className="mt-5 flex items-center justify-between text-sm"><span className="text-[var(--text-muted)]">Configured plan APY</span><span className="font-semibold text-[var(--text)]">{view.financialPosition.hysa.configuredApy == null ? "Not entered" : `${(view.financialPosition.hysa.configuredApy * 100).toFixed(2)}%`}</span></div>
               <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Plan value only, not a live APY reading. Intended for bills and reserve funding.</p>
@@ -405,9 +423,9 @@ export default async function Home() {
           <SectionHeader eyebrow="Connected activity" title="Weekly spending" detail="Purchases and subscriptions count. Card payments, transfers, investments, and funding offsets do not count as spending." />
           <Panel className="mt-5">
             <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-sm text-[var(--text-muted)]">Current period</p><p className="mt-1 text-lg font-semibold">{formatDate(view.weeklySpending.periodStart)} – {formatDate(view.weeklySpending.periodEnd)}</p></div><div className="text-left sm:text-right"><p className="text-sm text-[var(--text-muted)]">Weekly target</p><p className="mt-1 text-3xl font-semibold">{formatMoney(view.weeklySpending.target)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{formatMoney(view.weeklySpending.dailyTarget)} per day reference</p></div></div>
-            <div className="mt-7"><div className="flex justify-between text-sm"><span className="text-[var(--text-muted)]">Eligible spending</span><span className="font-semibold">{formatMoney(view.weeklySpending.eligibleSpending)} · {percent(view.weeklySpending.spendingPercentage)}</span></div><ProgressBar value={weeklyProgress} className="mt-3 h-3" /></div>
-            {view.weeklySpending.target != null && view.weeklySpending.eligibleSpending > view.weeklySpending.target && <p className="mt-3 text-sm font-semibold text-[var(--down)]">{formatMoney(view.weeklySpending.eligibleSpending - view.weeklySpending.target)} over target</p>}
-            <div className="mt-7 grid gap-5 border-t border-[var(--border)] pt-5 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Remaining budget" value={formatMoney(view.weeklySpending.remainingBudget)} /><Metric label="Eligible funding offset" value={formatMoney(view.weeklySpending.venmoBalance)} detail="Separate from spending" /><Metric label="Remaining funding need" value={formatMoney(view.weeklySpending.remainingFundingNeed)} positive={view.weeklySpending.remainingFundingNeed === 0} /><Metric label="Transactions counted" value={String(view.weeklySpending.transactionCount)} detail="Eligible activity" /></div>
+            <div className="mt-7"><div className="flex justify-between text-sm"><span className="text-[var(--text-muted)]">Eligible spending</span><span className="font-semibold">{formatWeeklyMoney(view.weeklySpending.eligibleSpending)} · {percent(view.weeklySpending.spendingPercentage)}</span></div><ProgressBar value={weeklyProgress} className="mt-3 h-3" /></div>
+            {view.weeklySpending.target != null && view.weeklySpending.eligibleSpending != null && view.weeklySpending.eligibleSpending > view.weeklySpending.target && <p className="mt-3 text-sm font-semibold text-[var(--down)]">{formatWeeklyMoney(view.weeklySpending.eligibleSpending - view.weeklySpending.target)} over target</p>}
+            <div className="mt-7 grid gap-5 border-t border-[var(--border)] pt-5 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Remaining budget" value={formatWeeklyMoney(view.weeklySpending.remainingBudget)} /><Metric label="Eligible funding offset" value={formatWeeklyMoney(view.weeklySpending.venmoBalance)} detail="Separate from spending" /><Metric label="Remaining funding need" value={formatWeeklyMoney(view.weeklySpending.remainingFundingNeed)} positive={view.weeklySpending.remainingFundingNeed === 0} /><Metric label="Transactions counted" value={String(view.weeklySpending.transactionCount)} detail="Eligible activity" /></div>
           </Panel>
         </section>
 
@@ -434,39 +452,39 @@ export default async function Home() {
 
         <section className="mt-12">
           <SectionHeader eyebrow="Connected activity" title="Invested money, by purpose" detail="Holdings, allocation, cash, and gains are shown only where connected data supports them." />
-          <div className="mt-5 grid gap-4 lg:grid-cols-2"><PortfolioTable title="Taxable equities" position={view.financialPosition.equities} currency={profile.currency} /><PortfolioTable title="Retirement accounts" position={view.financialPosition.retirement} currency={profile.currency} /></div>
+          <div className="mt-5 grid gap-4 lg:grid-cols-2"><PortfolioTable title="Taxable equities" position={view.financialPosition.equities} /><PortfolioTable title="Retirement accounts" position={view.financialPosition.retirement} /></div>
         </section>
 
         <section className="mt-12">
           <SectionHeader eyebrow="Connected activity" title="Portfolio growth" detail="Securities-only portfolio observations across connected investment accounts." />
           <Panel className="mt-5">
             <div className="flex flex-wrap items-end justify-between gap-5">
-              <div><p className="text-xs text-[var(--text-muted)]">Current invested portfolio value</p><p className="mt-1 text-3xl font-semibold tracking-tight">{formatMoney(currentInvestedPortfolioValue)}</p></div>
-              {view.portfolioGrowth.changeSinceFirstSnapshot == null ? <p className="text-sm text-[var(--text-muted)]">Change since first snapshot: Unavailable</p> : <p className={view.portfolioGrowth.changeSinceFirstSnapshot >= 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold text-[var(--down)]"}>Change since first snapshot: {formatSignedMoney(view.portfolioGrowth.changeSinceFirstSnapshot)}</p>}
+              <div><p className="text-xs text-[var(--text-muted)]">Current invested portfolio value</p><p className="mt-1 text-3xl font-semibold tracking-tight">{currentInvestedPortfolioValue == null || !portfolioCurrency ? "Unavailable" : money(currentInvestedPortfolioValue, portfolioCurrency)}</p></div>
+              {view.portfolioGrowth.changeSinceFirstSnapshot == null || !view.portfolioGrowth.currency ? <p className="text-sm text-[var(--text-muted)]">Change since first snapshot: Unavailable</p> : <p className={view.portfolioGrowth.changeSinceFirstSnapshot >= 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold text-[var(--down)]"}>Change since first snapshot: {signedMoney(view.portfolioGrowth.changeSinceFirstSnapshot, view.portfolioGrowth.currency)}</p>}
             </div>
-            <div className="mt-7"><PortfolioGrowthChart observations={view.portfolioGrowth.observations} currency={profile.currency} /></div>
+            <div className="mt-7">{view.portfolioGrowth.currency ? <PortfolioGrowthChart observations={view.portfolioGrowth.observations} currency={view.portfolioGrowth.currency} /> : <Empty>Portfolio history is unavailable until all snapshots have a known compatible currency.</Empty>}</div>
           </Panel>
         </section>
 
         <section className="mt-12 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel>
-            <div className="flex items-end justify-between gap-4"><SectionHeader eyebrow="Connected activity" title="Recent financial rhythm" /><div className="text-right"><p className="text-xs text-[var(--text-muted)]">Actual transactions · this month</p><p className="mt-1 text-sm font-semibold">{formatMoney(view.monthly.income)} in · {formatMoney(view.monthly.spending)} out</p></div></div>
-            <div className="mt-7 flex h-36 items-end gap-3">{view.monthlyHistory.map((item) => <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2"><div className="flex h-28 items-end gap-1"><i className="w-2 rounded-t bg-[var(--accent)]" style={{ height: `${Math.max((item.income / chartMax) * 100, item.income ? 4 : 0)}%` }} /><i className="w-2 rounded-t bg-[var(--text)]" style={{ height: `${Math.max((item.spending / chartMax) * 100, item.spending ? 4 : 0)}%` }} /></div><span className="text-xs text-[var(--text-muted)]">{item.label}</span></div>)}</div>
+            <div className="flex items-end justify-between gap-4"><SectionHeader eyebrow="Connected activity" title="Recent financial rhythm" /><div className="text-right"><p className="text-xs text-[var(--text-muted)]">Actual transactions · this month</p><p className="mt-1 text-sm font-semibold">{view.monthly.currencySafe && view.monthly.currency ? `${money(view.monthly.income, view.monthly.currency)} in · ${money(view.monthly.spending, view.monthly.currency)} out` : "Unavailable · mixed or unknown currencies"}</p></div></div>
+            {view.monthlyHistory.some((item) => !item.currencySafe) ? <p className="mt-7 text-sm text-[var(--text-muted)]">Historical transaction totals are unavailable for periods with mixed or unknown account currencies.</p> : <div className="mt-7 flex h-36 items-end gap-3">{view.monthlyHistory.map((item) => <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2"><div className="flex h-28 items-end gap-1"><i className="w-2 rounded-t bg-[var(--accent)]" style={{ height: `${Math.max((item.income / chartMax) * 100, item.income ? 4 : 0)}%` }} /><i className="w-2 rounded-t bg-[var(--text)]" style={{ height: `${Math.max((item.spending / chartMax) * 100, item.spending ? 4 : 0)}%` }} /></div><span className="text-xs text-[var(--text-muted)]">{item.label}</span></div>)}</div>}
           </Panel>
           <Panel>
             <SectionHeader eyebrow="Attention" title="What deserves a look" />
-            <div className="mt-5 space-y-4 text-sm leading-6 text-[var(--text-muted)]"><p>{view.financialPosition.hysa.accounts.length === 0 ? "No reserve account is currently connected or designated." : "Your reserve account is separated from general spending cash."}</p><p>{view.weeklySpending.remainingFundingNeed == null ? "Enter a weekly target to calculate remaining funding need." : view.weeklySpending.remainingFundingNeed > 0 ? `${formatMoney(view.weeklySpending.remainingFundingNeed)} still needs funding after the connected offset.` : "This week's configured spending target is covered after the connected offset."}</p><p>{nextPaycheck ? `Next plan checkpoint: ${formatDate(nextPaycheck.date)}.` : "No future paycheck is configured beyond the current schedule."}</p></div>
+            <div className="mt-5 space-y-4 text-sm leading-6 text-[var(--text-muted)]"><p>{view.financialPosition.hysa.accounts.length === 0 ? "No reserve account is currently connected or designated." : "Your reserve account is separated from general spending cash."}</p><p>{view.weeklySpending.remainingFundingNeed == null ? "Enter a weekly target to calculate remaining funding need." : view.weeklySpending.remainingFundingNeed > 0 ? `${formatWeeklyMoney(view.weeklySpending.remainingFundingNeed)} still needs funding after the connected offset.` : "This week's configured spending target is covered after the connected offset."}</p><p>{nextPaycheck ? `Next plan checkpoint: ${formatDate(nextPaycheck.date)}.` : "No future paycheck is configured beyond the current schedule."}</p></div>
           </Panel>
         </section>
 
         <section className="mt-12 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel>
             <SectionHeader eyebrow="Connected activity" title="Latest transactions" />
-            <div className="mt-5 divide-y divide-[var(--border)]">{recent.length === 0 ? <Empty>No recent transactions available.</Empty> : recent.slice(0, 8).map((transaction) => { const amount = number(transaction.amount); return <div key={transaction.id} className="flex justify-between gap-4 py-3 first:pt-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{transaction.merchant_name ?? transaction.name ?? "Unknown transaction"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{transaction.date} · {transactionCategory(transaction)}{transaction.pending ? " · Pending" : ""}</p></div><p className={amount != null && amount < 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold"}>{formatMoney(amount)}</p></div>; })}</div>
+            <div className="mt-5 divide-y divide-[var(--border)]">{recent.length === 0 ? <Empty>No recent transactions available.</Empty> : recent.slice(0, 8).map((transaction) => { const amount = number(transaction.amount); const currency = accountCurrency(view.accounts.find((account) => account.id === transaction.account_id || account.plaid_account_id === transaction.account_id)); return <div key={transaction.id} className="flex justify-between gap-4 py-3 first:pt-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{transaction.merchant_name ?? transaction.name ?? "Unknown transaction"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{transaction.date} · {transactionCategory(transaction)}{transaction.pending ? " · Pending" : ""}</p></div><p className={amount != null && amount < 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold"}>{currency ? money(amount, currency) : "Unknown currency"}</p></div>; })}</div>
           </Panel>
           <Panel>
             <SectionHeader eyebrow="Connected accounts" title="Account map" detail="Purpose labels keep account roles clear without exposing IDs." />
-            <div className="mt-5 divide-y divide-[var(--border)]">{view.accounts.length === 0 ? <Empty>No connected accounts yet.</Empty> : view.accounts.map((account) => <div key={account.id} className="flex justify-between gap-4 py-3 first:pt-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{accountName(account)}</p><p className="mt-1 text-xs uppercase tracking-[0.12em] text-[var(--text-muted)]">{account.accountClass}</p></div><p className="text-sm font-semibold">{formatMoney(account.current_balance)}</p></div>)}</div>
+            <div className="mt-5 divide-y divide-[var(--border)]">{view.accounts.length === 0 ? <Empty>No connected accounts yet.</Empty> : view.accounts.map((account) => <div key={account.id} className="flex justify-between gap-4 py-3 first:pt-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{accountName(account)}</p><p className="mt-1 text-xs uppercase tracking-[0.12em] text-[var(--text-muted)]">{account.accountClass} · {account.currency ?? "currency unknown"}</p></div><p className="text-sm font-semibold">{account.currency ? money(account.current_balance, account.currency) : "Unknown currency"}</p></div>)}</div>
           </Panel>
         </section>
 
