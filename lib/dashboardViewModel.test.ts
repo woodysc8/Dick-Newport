@@ -282,6 +282,46 @@ describe("cash-aware portfolio positions", () => {
     expect(view.overallPosition.netWorth).toBeNull();
   });
 
+  it("does not turn unknown checking balances into a partial subtotal", () => {
+    const view = buildDashboardViewModel({
+      accounts: [
+        account({ institution_name: "USAA", account_type: "depository", account_subtype: "checking", current_balance: 500 }),
+        account({ id: "unknown", institution_name: "USAA", account_type: "depository", account_subtype: "checking", current_balance: null }),
+      ],
+      monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.overallPosition.checkingBalance).toBeNull();
+    expect(view.accountSummary.cash).toBeNull();
+  });
+
+  it("does not turn unknown holding values into a partial invested total", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({})],
+      monthTransactions: [], historicalTransactions: [], snapshots: [],
+      holdings: [holding({ institution_value: 100 }), holding({ id: "unknown", institution_value: null })],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.financialPosition.equities.investedValue).toBeNull();
+    expect(view.financialPosition.equities.totalGain).toBeNull();
+  });
+
+  it("does not compare securities holdings with cash-inclusive snapshots", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({})],
+      monthTransactions: [], historicalTransactions: [],
+      holdings: [holding({ institution_value: 120, cost_basis: 100 })],
+      snapshots: [snapshot({ snapshot_date: "2026-10-01", portfolio_value: 100, securities_value: null })],
+      now: new Date("2026-10-08T12:00:00.000Z"),
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+
+    expect(view.investmentPerformance.sevenDayReturn).toBeNull();
+    expect(view.investmentPerformance.sevenDayReturnPercent).toBeNull();
+  });
+
   it("subtracts the positive amount owed on credit accounts from net worth", () => {
     const view = buildDashboardViewModel({
       accounts: [

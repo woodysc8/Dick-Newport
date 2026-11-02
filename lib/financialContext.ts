@@ -23,6 +23,9 @@ export type FinancialContext = {
     cash: number | null;
     creditCardDebt: number | null;
     investments: number | null;
+    currency: string | null;
+    currencySafe: boolean;
+    complete: boolean;
   };
   accounts: Array<{
     institution: string | null;
@@ -37,6 +40,9 @@ export type FinancialContext = {
   }>;
   investments: {
     totalValue: number | null;
+    currency: string | null;
+    currencySafe: boolean;
+    complete: boolean;
     holdings: Array<{
       ticker: string | null;
       name: string | null;
@@ -72,6 +78,7 @@ export type FinancialContext = {
     amount: number | string | null;
     category: string | string[] | null;
     pending: boolean | null;
+    currency: string | null;
   }>;
   rewards: {
     biltPoints: number | null;
@@ -143,6 +150,7 @@ export async function getFinancialContext(
   const holdings = (holdingsResult.data ?? []) as InvestmentHolding[];
   const accountSummary = accounting.summarizeAccounts(accounts);
   const monthly = accounting.computeMonthlyAccounting(monthlyTransactions, accounts);
+  const accountAggregatesComplete = accountSummary.netWorth != null && accountSummary.currency != null && !accountSummary.mixedCurrency;
   const categories = monthly.currencySafe
     ? Object.fromEntries(monthly.spendingByCategory.map(({ category, total }) => [category, total]))
     : {};
@@ -154,6 +162,9 @@ export async function getFinancialContext(
       cash: accountSummary.cash,
       creditCardDebt: accountSummary.credit,
       investments: accountSummary.investments,
+      currency: accountSummary.currency,
+      currencySafe: accountSummary.currency != null && !accountSummary.mixedCurrency,
+      complete: accountAggregatesComplete,
     },
     accounts: accounts.map((account) => ({
       institution: account.institution_name,
@@ -168,6 +179,9 @@ export async function getFinancialContext(
     })),
     investments: {
       totalValue: accountSummary.investments,
+      currency: accountSummary.currency,
+      currencySafe: accountSummary.currency != null && !accountSummary.mixedCurrency,
+      complete: accountSummary.investments != null && accountSummary.currency != null && !accountSummary.mixedCurrency,
       holdings: holdings.map((holding) => ({
         ticker: holding.ticker_symbol,
         name: holding.security_name,
@@ -197,6 +211,12 @@ export async function getFinancialContext(
       amount: transaction.amount,
       category: transaction.category,
       pending: transaction.pending,
+      currency: (() => {
+        const account = accounts.find((candidate) =>
+          candidate.id === transaction.account_id || candidate.plaid_account_id === transaction.account_id
+        );
+        return account?.currency ?? null;
+      })(),
     })),
     rewards: {
       biltPoints: rewardBalances.find((reward) => reward.label === "Bilt Points")?.value ?? null,

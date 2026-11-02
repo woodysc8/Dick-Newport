@@ -101,7 +101,7 @@ export type DashboardViewModel = {
     profileAccountNetWorth: number | null;
     netWorthComplete: boolean;
     checkingAccounts: AccountWithClass[];
-    checkingBalance: number;
+    checkingBalance: number | null;
   };
   financialPosition: {
     equities: PortfolioPosition;
@@ -155,52 +155,73 @@ function monthlyHistory(transactions: RecentTransaction[], accounts: DashboardAc
 
 function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: InvestmentSnapshot[], accounts: DashboardAccount[], now: Date) {
   const accountCurrencyByPlaidId = new Map(accounts.map((account) => [account.plaid_account_id, normalizedCurrency(account.currency)]));
+  const eligibleAccountIds = new Set(
+    accounts
+      .filter((account) => {
+        const purpose = getPurpose(account);
+        return purpose === "equities" || purpose === "retirement";
+      })
+      .map((account) => account.plaid_account_id)
+      .filter((id): id is string => Boolean(id))
+  );
+  const currentHoldings = holdings.filter((holding) =>
+    holding.plaid_account_id != null &&
+    eligibleAccountIds.has(holding.plaid_account_id) &&
+    !isCashHolding(holding)
+  );
+  const currentAccountIds = new Set(currentHoldings.map((holding) => holding.plaid_account_id));
   const currencies = new Set<string>();
   let unknownCurrency = false;
-  for (const holding of holdings) {
+  for (const holding of currentHoldings) {
     const currency = normalizedCurrency(holding.currency ?? holding.iso_currency_code) ?? accountCurrencyByPlaidId.get(holding.plaid_account_id);
     if (currency) currencies.add(currency);
     else unknownCurrency = true;
   }
-  for (const snapshot of snapshots) {
-    const currency = accountCurrencyByPlaidId.get(snapshot.plaid_account_id);
-    if (currency) currencies.add(currency);
-    else unknownCurrency = true;
-  }
   const mixedCurrency = currencies.size > 1 || unknownCurrency;
-  const unavailable = mixedCurrency || (currencies.size === 0 && unknownCurrency);
-  const reliableHoldings = holdings.length > 0 && holdings.every((holding) =>
+  const reliableHoldings = currentHoldings.length > 0 && currentHoldings.every((holding) =>
     numberOrNull(holding.institution_value) != null && (numberOrNull(holding.cost_basis) ?? 0) > 0
   );
-  const holdingsValue = unavailable ? null : reliableHoldings
-    ? holdings.reduce((total, holding) => total + (numberOrNull(holding.institution_value) ?? 0), 0)
+  const currentValue = !mixedCurrency && reliableHoldings
+    ? currentHoldings.reduce((total, holding) => total + numberOrNull(holding.institution_value)!, 0)
     : null;
-  const costBasis = unavailable ? null : reliableHoldings
-    ? holdings.reduce((total, holding) => total + (numberOrNull(holding.cost_basis) ?? 0), 0)
-    : null;
-  const totalReturn = holdingsValue != null && costBasis != null ? holdingsValue - costBasis : null;
-  const totalReturnPercent = totalReturn != null && costBasis != null && costBasis > 0
-    ? (totalReturn / costBasis) * 100
+  const currentCostBasis = !mixedCurrency && reliableHoldings
+    ? currentHoldings.reduce((total, holding) => total + numberOrNull(holding.cost_basis)!, 0)
     : null;
   const target = new Date(now);
   target.setDate(target.getDate() - 7);
   const targetMs = target.getTime();
-  const weeklySnapshot = snapshots
-    .filter((snapshot) => new Date(snapshot.snapshot_date).getTime() < now.getTime())
-    .map((snapshot) => ({ snapshot, distance: Math.abs(new Date(snapshot.snapshot_date).getTime() - targetMs) }))
-    .filter((candidate) => candidate.distance <= 2 * 24 * 60 * 60 * 1000)
-    .sort((left, right) => left.distance - right.distance)[0]?.snapshot;
-  const weeklyValue = numberOrNull(weeklySnapshot?.portfolio_value);
-  const sevenDayReturn = holdingsValue != null && weeklyValue != null && weeklyValue > 0
-    ? holdingsValue - weeklyValue
+  const snapshotsByDate = new Map<string, InvestmentSnapshot[]>();
+  for (const snapshot of snapshots) {
+    const snapshotList = snapshotsByDate.get(snapshot.snapshot_date) ?? [];
+    snapshotList.push(snapshot);
+    snapshotsByDate.set(snapshot.snapshot_date, snapshotList);
+  }
+  const weeklySnapshotGroup = [...snapshotsByDate.entries()]
+    .map(([date, snapshotGroup]) => ({
+      date,
+      snapshotGroup,
+      distance: Math.abs(new Date(date).getTime() - targetMs),
+    }))
+    .filter(({ date, snapshotGroup, distance }) =>
+      new Date(date).getTime() < now.getTime() &&
+      distance <= 2 * 24 * 60 * 60 * 1000 &&
+      new Set(snapshotGroup.map((snapshot) => snapshot.plaid_account_id)).size === currentAccountIds.size &&
+      snapshotGroup.every((snapshot) => currentAccountIds.has(snapshot.plaid_account_id) && numberOrNull(snapshot.securities_value) != null)
+    )
+    .sort((left, right) => left.distance - right.distance)[0]?.snapshotGroup;
+  const weeklyValue = weeklySnapshotGroup?.length === currentAccountIds.size
+    ? weeklySnapshotGroup.reduce((total, snapshot) => total + numberOrNull(snapshot.securities_value)!, 0)
+    : null;
+  const sevenDayReturn = currentValue != null && weeklyValue != null && weeklyValue > 0
+    ? currentValue - weeklyValue
     : null;
   const sevenDayReturnPercent = sevenDayReturn != null && weeklyValue != null
     ? (sevenDayReturn / weeklyValue) * 100
     : null;
 
   return {
-    totalReturn,
-    totalReturnPercent,
+    totalReturn: currentValue != null && currentCostBasis != null ? currentValue - currentCostBasis : null,
+    totalReturnPercent: currentValue != null && currentCostBasis != null && currentCostBasis > 0 ? ((currentValue - currentCostBasis) / currentCostBasis) * 100 : null,
     sevenDayReturn,
     sevenDayReturnPercent,
     // A YTD benchmark requires a compatible beginning-of-year portfolio snapshot.
@@ -209,12 +230,18 @@ function getInvestmentPerformance(holdings: InvestmentHolding[], snapshots: Inve
   };
 }
 
-function numericBalance(value: number | string | null): number {
-  return numberOrNull(value) ?? 0;
+function numericBalance(value: number | string | null): number | null {
+  return numberOrNull(value);
 }
 
-function sumBalances(accounts: DashboardAccount[]): number {
-  return accounts.reduce((total, account) => total + numericBalance(account.current_balance), 0);
+function sumBalances(accounts: DashboardAccount[]): number | null {
+  let total = 0;
+  for (const account of accounts) {
+    const balance = numericBalance(account.current_balance);
+    if (balance == null) return null;
+    total += balance;
+  }
+  return total;
 }
 
 function getPurpose(account: DashboardAccount): FinancialAccountPurpose {
@@ -364,7 +391,8 @@ function buildPortfolioPosition(
   const mixedCurrency = currencies.size > 1 || unknownCurrency;
   const currency = currencies.size === 1 && !unknownCurrency ? [...currencies][0] : null;
   const currentValue = mixedCurrency ? null : sumBalances(purposeAccounts);
-  const investedValue = mixedCurrency ? null : purposeHoldings.reduce((total, holding) => total + numericBalance(holding.institution_value), 0);
+  const holdingsHaveKnownValues = purposeHoldings.every((holding) => numberOrNull(holding.institution_value) != null);
+  const investedValue = mixedCurrency || !holdingsHaveKnownValues ? null : purposeHoldings.reduce((total, holding) => total + numberOrNull(holding.institution_value)!, 0);
   const holdingsWithMetrics = purposeHoldings.map((holding) => {
     const value = numberOrNull(holding.institution_value);
     const costBasis = numberOrNull(holding.cost_basis);
@@ -378,8 +406,12 @@ function buildPortfolioPosition(
     };
   });
   const knownGains = holdingsWithMetrics.filter((holding) => holding.gain != null);
-  const totalGain = knownGains.length > 0 ? knownGains.reduce((total, holding) => total + (holding.gain ?? 0), 0) : null;
-  const totalCostBasis = purposeHoldings.reduce((total, holding) => total + (numberOrNull(holding.cost_basis) ?? 0), 0);
+  const totalGain = holdingsHaveKnownValues && knownGains.length === purposeHoldings.length
+    ? knownGains.reduce((total, holding) => total + (holding.gain ?? 0), 0)
+    : null;
+  const totalCostBasis = purposeHoldings.every((holding) => numberOrNull(holding.cost_basis) != null)
+    ? purposeHoldings.reduce((total, holding) => total + numberOrNull(holding.cost_basis)!, 0)
+    : null;
 
   return {
     accounts: purposeAccounts,
@@ -388,7 +420,7 @@ function buildPortfolioPosition(
     cashValue: currentValue != null && investedValue != null ? Math.max(0, currentValue - investedValue) : null,
     holdings: holdingsWithMetrics,
     totalGain: mixedCurrency ? null : totalGain,
-    totalGainPercent: mixedCurrency ? null : totalGain != null && totalCostBasis > 0 ? (totalGain / totalCostBasis) * 100 : null,
+    totalGainPercent: mixedCurrency ? null : totalGain != null && totalCostBasis != null && totalCostBasis > 0 ? (totalGain / totalCostBasis) * 100 : null,
     currency,
     currencies: [...currencies].sort(),
     mixedCurrency,
@@ -456,9 +488,9 @@ export function buildDashboardViewModel({
       .map((account) => typeof account.currency === "string" && /^[A-Za-z]{3}$/.test(account.currency) ? account.currency.toUpperCase() : null)
   );
   const venmoCurrency = venmoCurrencies.size === 1 && !venmoCurrencies.has(null) ? [...venmoCurrencies][0] : null;
-  const venmoBalance = venmoAccounts.length === 0 || venmoCurrencies.has(null) || venmoCurrencies.size > 1
+  const venmoBalance = venmoAccounts.length === 0 || venmoCurrencies.has(null) || venmoCurrencies.size > 1 || venmoAccounts.some((account) => numericBalance(account.current_balance) == null)
     ? venmoAccounts.length === 0 ? 0 : null
-    : venmoAccounts.reduce((total, account) => total + numericBalance(account.current_balance), 0);
+    : venmoAccounts.reduce((total, account) => total + numericBalance(account.current_balance)!, 0);
   const configuredSpendingTarget = profile.budget?.monthlySpendingTarget ??
     (profile.budget?.expenses?.length ? profile.budget.expenses.reduce((total, line) => total + line.amount, 0) : undefined);
 

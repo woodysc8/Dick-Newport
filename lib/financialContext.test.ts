@@ -6,6 +6,7 @@ describe("financial context currency propagation", () => {
   it("preserves connected account and holding currencies", async () => {
     const rows: Record<string, unknown[]> = {
       accounts: [{
+        id: "account-row-1",
         institution_name: "Example Bank",
         account_name: "Checking",
         mask: "1234",
@@ -17,7 +18,16 @@ describe("financial context currency propagation", () => {
         plaid_account_id: "account-1",
         plaid_item_id: "item-1",
       }],
-      transactions: [],
+      transactions: [{
+        id: "transaction-1",
+        date: "2026-10-05",
+        name: "Purchase",
+        merchant_name: "Example",
+        amount: 10,
+        category: ["Shops"],
+        pending: false,
+        account_id: "account-row-1",
+      }],
       investment_holdings: [{
         id: "holding-1",
         plaid_account_id: "account-1",
@@ -54,5 +64,8 @@ describe("financial context currency propagation", () => {
     expect(context.accounts[0].currency).toBe("EUR");
     expect(context.investments.holdings[0].currency).toBe("EUR");
     expect(context.netWorth.total).toBe(100);
+    expect(context.netWorth.currency).toBe("EUR");
+    expect(context.netWorth.complete).toBe(true);
+    expect(context.recentTransactions[0].currency).toBe("EUR");
   });
 });

@@ -17,7 +17,7 @@ export async function GET(request: Request) {
     // fetch accounts
     const { data: accounts, error: accErr } = await auth.supabase
       .from("accounts")
-      .select("id, institution_name, account_name, account_type, account_subtype, current_balance, available_balance, plaid_account_id, mask")
+      .select("id, institution_name, account_name, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, mask")
       .eq("user_id", auth.user.id)
       .order("created_at", { ascending: false });
 
