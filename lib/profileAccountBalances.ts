@@ -5,6 +5,7 @@ export type ProfileBalanceExclusionReason = "unknown-balance" | "invalid-balance
 
 export type ProfileAccountBalanceItem = {
   name: string;
+  currency: string;
   accountType: FinancialAccountProfile["accountType"];
   balance?: number;
   balanceSource: FinancialAccountProfile["balanceSource"];
@@ -22,6 +23,9 @@ export type ProfileAccountBalanceSummary = {
   netWorth: number | null;
   complete: boolean;
   excludedCount: number;
+  currency: string | null;
+  currencies: string[];
+  mixedCurrency: boolean;
 };
 
 /** Summarizes configured profile accounts only; legacy manualBalances remain a separate fallback display. */
@@ -34,8 +38,11 @@ export function summarizeProfileAccountBalances(profile: FinancialProfile): Prof
     liabilities: { amount: 0, unknown: false },
   };
   let unsupported = false;
+  const currencies = new Set<string>();
 
   const items = accounts.map((account) => {
+    const currency = account.currency ?? profile.currency;
+    if (/^[A-Z]{3}$/.test(currency)) currencies.add(currency);
     const balanceClass = classifyAccount(account.accountType);
     let exclusionReason: ProfileBalanceExclusionReason | undefined;
     if (balanceClass === "unsupported") {
@@ -51,6 +58,7 @@ export function summarizeProfileAccountBalances(profile: FinancialProfile): Prof
     }
     return {
       name: account.name,
+      currency,
       accountType: account.accountType,
       balance: account.balance,
       balanceSource: account.balanceSource,
@@ -60,9 +68,11 @@ export function summarizeProfileAccountBalances(profile: FinancialProfile): Prof
     };
   });
 
-  const cash = totals.cash.unknown ? null : totals.cash.amount;
-  const investments = totals.investments.unknown ? null : totals.investments.amount;
-  const liabilities = totals.liabilities.unknown ? null : totals.liabilities.amount;
+  const mixedCurrency = currencies.size > 1;
+  const currency = currencies.size === 1 ? [...currencies][0] : null;
+  const cash = mixedCurrency || totals.cash.unknown ? null : totals.cash.amount;
+  const investments = mixedCurrency || totals.investments.unknown ? null : totals.investments.amount;
+  const liabilities = mixedCurrency || totals.liabilities.unknown ? null : totals.liabilities.amount;
   const configured = accounts.length > 0;
   const complete = configured && !unsupported && cash !== null && investments !== null && liabilities !== null;
 
@@ -75,6 +85,9 @@ export function summarizeProfileAccountBalances(profile: FinancialProfile): Prof
     netWorth: complete ? cash! + investments! - liabilities! : null,
     complete,
     excludedCount: items.filter((item) => !item.included).length,
+    currency,
+    currencies: [...currencies].sort(),
+    mixedCurrency,
   };
 }
 

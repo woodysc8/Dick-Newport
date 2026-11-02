@@ -92,6 +92,17 @@ describe("summarizeProfileAccountBalances", () => {
     expect(result.items[0].exclusionReason).toBe("unsupported-account-type");
   });
 
+  it("does not aggregate profile balances across currencies", () => {
+    const result = summarizeProfileAccountBalances(profile([
+      account({ name: "USD checking", balance: 100, currency: "USD" }),
+      account({ name: "EUR checking", balance: 200, currency: "EUR" }),
+    ]));
+    expect(result.mixedCurrency).toBe(true);
+    expect(result.currencies).toEqual(["EUR", "USD"]);
+    expect(result.cash).toBeNull();
+    expect(result.netWorth).toBeNull();
+  });
+
   it("preserves Richard's example values and excludes its unconfigured profile accounts", () => {
     const before = structuredClone(LEGACY_EXAMPLE_FINANCIAL_PROFILE);
     expect(LEGACY_EXAMPLE_FINANCIAL_PROFILE).toEqual(before);

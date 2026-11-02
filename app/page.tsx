@@ -294,8 +294,8 @@ export default async function Home() {
         <header className="flex flex-wrap items-start justify-between gap-6 border-b border-[var(--border)] pb-7">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--accent-ink)]">Personal finance · financial operating system</p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Budget Builder</h1>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-muted)]">A live view of where your money is, what it is for, and what deserves attention next.</p>
+            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Dick-Newport</h1>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-muted)]">A clear view of your financial picture, with connected data and profile estimates kept distinct.</p>
           </div>
           <div className="flex flex-wrap items-center gap-3"><span className="text-xs text-[var(--text-muted)]">Plaid connections paused</span><a href="/settings/profile" className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Financial profile</a><form action={signOut}><button className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
         </header>
@@ -305,7 +305,24 @@ export default async function Home() {
         {dataUnavailable && <div className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--surface)] p-4 text-sm text-[var(--text-muted)]">Some connected data is unavailable. Plan values remain visible; live balances appear when their source loads.</div>}
 
         <section className="mt-10">
-          <SectionHeader eyebrow="Overall position" title="The starting point" detail="Connected balances and configured profile balances are shown by source; checking remains connected-only." />
+          <SectionHeader eyebrow="Overview" title="Your monthly financial picture" detail="Estimate based on the financial profile. Complete, partial, and unavailable states are preserved; unknown inputs are not treated as zero." />
+          <Panel className="mt-5">
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <Metric label="Take-home income" value={formatMoney(view.financialPlanning.income.estimatedMonthlyTakeHomeIncome)} detail={planningDetail(view.financialPlanning.income.status, view.financialPlanning.income.excludedSources.length)} />
+              <Metric label="Recurring expenses" value={formatMoney(view.financialPlanning.recurringExpenses.estimatedMonthlyExpenses)} detail={planningDetail(view.financialPlanning.recurringExpenses.status, view.financialPlanning.recurringExpenses.excludedItems.length)} />
+              <Metric label="Debt payments" value={formatMoney(view.financialPlanning.debtPayments.monthlyAmount)} detail={planningDetail(view.financialPlanning.debtPayments.status, view.financialPlanning.debtPayments.excludedItems.length)} />
+              <Metric label="Savings allocations" value={formatMoney(view.financialPlanning.savingsAllocations.monthlyAmount)} detail={planningDetail(view.financialPlanning.savingsAllocations.status, view.financialPlanning.savingsAllocations.excludedItems.length)} />
+              <Metric label="Remaining monthly cash" value={formatMoney(view.financialPlanning.remainingMonthlyCash)} detail={view.financialPlanning.remainingMonthlyCash == null ? view.financialPlanning.remainingMonthlyCashReason : "Complete required cash-flow inputs"} positive={view.financialPlanning.remainingMonthlyCash != null && view.financialPlanning.remainingMonthlyCash >= 0} />
+            </div>
+            {view.financialPlanning.income.excludedSources.length > 0 && <p className="mt-4 text-xs leading-5 text-[var(--text-muted)]">Income excluded: {view.financialPlanning.income.excludedSources.map(({ source, reason }) => `${source.name} (${reason})`).join(", ")}</p>}
+            {view.financialPlanning.recurringExpenses.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Expenses excluded: {view.financialPlanning.recurringExpenses.excludedItems.map(({ name, exclusionReason }) => `${name} (${exclusionReason})`).join(", ")}</p>}
+            {view.financialPlanning.debtPayments.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Debt payments excluded: {view.financialPlanning.debtPayments.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
+            {view.financialPlanning.savingsAllocations.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Savings excluded: {view.financialPlanning.savingsAllocations.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
+          </Panel>
+        </section>
+
+        <section className="mt-10">
+          <SectionHeader eyebrow="Assets and liabilities" title="What you own and owe" detail="Connected balances, profile-entered accounts, properties, and debts are shown as separate sources and categories." />
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <Panel>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Net worth</p>
@@ -323,7 +340,8 @@ export default async function Home() {
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[var(--text-muted)]">Profile account balances</p>
             <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Manual and profile-imported entries are separate from connected accounts and are included once. No name-based matching is available, so similarly named records remain separate.</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-3"><Metric label="Cash / depository" value={formatMoney(view.profileAccountBalances.cash)} /><Metric label="Investments / retirement" value={formatMoney(view.profileAccountBalances.investments)} /><Metric label="Debt liabilities" value={formatMoney(view.profileAccountBalances.liabilities)} /></div>
-            {view.profileAccountBalances.items.length === 0 ? <p className="mt-4 text-sm text-[var(--text-muted)]">No profile accounts configured. Legacy manual balance fields are not added to this collection.</p> : <div className="mt-4 divide-y divide-[var(--border)]">{view.profileAccountBalances.items.map((item, index) => <div key={`${item.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span className="min-w-0 truncate">{item.name} · {item.balanceSource === "imported" ? "Profile imported" : item.balanceSource === "manual" ? "Manual" : "Source unknown"}{!item.included ? ` · ${item.exclusionReason}` : ""}</span><span className="shrink-0 font-medium">{item.balance == null ? "Unknown" : formatMoney(item.balance)}</span></div>)}</div>}
+            {view.profileAccountBalances.items.length === 0 ? <p className="mt-4 text-sm text-[var(--text-muted)]">No profile accounts configured. Legacy manual balance fields are not added to this collection.</p> : <div className="mt-4 divide-y divide-[var(--border)]">{view.profileAccountBalances.items.map((item, index) => <div key={`${item.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span className="min-w-0 truncate">{item.name} · {item.balanceSource === "imported" ? "Profile imported" : item.balanceSource === "manual" ? "Manual" : "Source unknown"} · {item.currency}{!item.included ? ` · ${item.exclusionReason}` : ""}</span><span className="shrink-0 font-medium">{item.balance == null ? "Unknown" : money(item.balance, item.currency)}</span></div>)}</div>}
+            {view.profileAccountBalances.mixedCurrency && <p className="mt-3 text-xs leading-5 text-[var(--text-muted)]">Profile account totals are unavailable because balances use multiple currencies ({view.profileAccountBalances.currencies.join(", ")}). No currency conversion is applied.</p>}
             {profile.manualBalances && <p className="mt-3 text-xs text-[var(--text-muted)]">Legacy cash/savings values are not added while this account collection is configured.</p>}
             {!view.profileAccountBalances.complete && <p className="mt-3 text-xs text-[var(--text-muted)]">The profile account total may be incomplete because some balances are unknown or unsupported.</p>}
           </Panel>}
@@ -351,19 +369,8 @@ export default async function Home() {
         </section>
 
         <section className="mt-12">
-          <SectionHeader eyebrow="Generalized monthly plan" title="Your profile-based monthly picture" detail="Only complete calculations are used for remaining monthly cash. Partial subtotals are labeled and excluded records are explained." />
+          <SectionHeader eyebrow="Retirement and goals" title="Plans beyond monthly cash flow" detail="Income and recurring-expense records provide detail; retirement plans, employer matches, and goals remain separate from cash-flow calculations." />
           <Panel className="mt-5">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-              <Metric label="Take-home income" value={formatMoney(view.financialPlanning.income.estimatedMonthlyTakeHomeIncome)} detail={planningDetail(view.financialPlanning.income.status, view.financialPlanning.income.excludedSources.length)} />
-              <Metric label="Recurring expenses" value={formatMoney(view.financialPlanning.recurringExpenses.estimatedMonthlyExpenses)} detail={planningDetail(view.financialPlanning.recurringExpenses.status, view.financialPlanning.recurringExpenses.excludedItems.length)} />
-              <Metric label="Debt minimum payments" value={formatMoney(view.financialPlanning.debtPayments.monthlyAmount)} detail={planningDetail(view.financialPlanning.debtPayments.status, view.financialPlanning.debtPayments.excludedItems.length)} />
-              <Metric label="Savings allocations" value={formatMoney(view.financialPlanning.savingsAllocations.monthlyAmount)} detail={planningDetail(view.financialPlanning.savingsAllocations.status, view.financialPlanning.savingsAllocations.excludedItems.length)} />
-              <Metric label="Remaining monthly cash" value={formatMoney(view.financialPlanning.remainingMonthlyCash)} detail={view.financialPlanning.remainingMonthlyCash == null ? view.financialPlanning.remainingMonthlyCashReason : "Complete required cash-flow inputs"} positive={view.financialPlanning.remainingMonthlyCash != null && view.financialPlanning.remainingMonthlyCash >= 0} />
-            </div>
-            {view.financialPlanning.income.excludedSources.length > 0 && <p className="mt-4 text-xs leading-5 text-[var(--text-muted)]">Income excluded: {view.financialPlanning.income.excludedSources.map(({ source, reason }) => `${source.name} (${reason})`).join(", ")}</p>}
-            {view.financialPlanning.recurringExpenses.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Expenses excluded: {view.financialPlanning.recurringExpenses.excludedItems.map(({ name, exclusionReason }) => `${name} (${exclusionReason})`).join(", ")}</p>}
-            {view.financialPlanning.debtPayments.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Debt payments excluded: {view.financialPlanning.debtPayments.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
-            {view.financialPlanning.savingsAllocations.excludedItems.length > 0 && <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Savings excluded: {view.financialPlanning.savingsAllocations.excludedItems.map(({ name, reason }) => `${name} (${reason})`).join(", ")}</p>}
             <div className="mt-6 grid gap-4 border-t border-[var(--border)] pt-5 lg:grid-cols-2">
               <div><h3 className="font-semibold">Income sources</h3>{normalizedProfile.incomeSources?.length ? <div className="mt-3 divide-y divide-[var(--border)]">{normalizedProfile.incomeSources.map((source, index) => <div key={`${source.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span>{source.name} <span className="text-xs text-[var(--text-muted)]">· {source.type}</span></span><span>{source.amount == null ? "Unknown" : money(source.amount, profile.currency)}{source.frequency ? ` / ${source.frequency}` : ""}</span></div>)}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No income sources are configured.</p>}</div>
               <div><h3 className="font-semibold">Recurring expenses</h3>{normalizedProfile.recurringExpenses?.length ? <div className="mt-3 divide-y divide-[var(--border)]">{normalizedProfile.recurringExpenses.map((expense, index) => <div key={`${expense.name}-${index}`} className="flex items-center justify-between gap-4 py-2 text-sm"><span>{expense.name} <span className="text-xs text-[var(--text-muted)]">· {expense.category ?? "Uncategorized"}</span></span><span>{expense.amount == null ? "Unknown" : money(expense.amount, profile.currency)}{expense.frequency ? ` / ${expense.frequency}` : ""}</span></div>)}</div> : <p className="mt-2 text-sm text-[var(--text-muted)]">No recurring expenses are configured.</p>}</div>
@@ -376,7 +383,7 @@ export default async function Home() {
         </section>
 
         <section className="mt-10">
-          <SectionHeader eyebrow="Financial position" title="Where your money is" detail="Three distinct jobs for your money: flexible investing, retirement growth, and bills reserve." />
+          <SectionHeader eyebrow="Assets and investments" title="Connected financial position" detail="Connected account balances and holdings are shown separately from profile-entered properties, accounts, and debts." />
           <div className="mt-5 grid gap-4 lg:grid-cols-3">
             <PositionCard label="Investments" description="Taxable investment accounts classified from account metadata" position={view.financialPosition.equities} currency={profile.currency}>
               <p className="mt-5 text-xs text-[var(--text-muted)]">Flexible invested money · holdings below</p>
@@ -395,7 +402,7 @@ export default async function Home() {
         </section>
 
         <section className="mt-12">
-          <SectionHeader eyebrow="Weekly spending" title="Friday → Thursday" detail="Purchases and subscriptions count. Card payments, transfers, investments, and funding offsets do not count as spending." />
+          <SectionHeader eyebrow="Connected activity" title="Weekly spending" detail="Purchases and subscriptions count. Card payments, transfers, investments, and funding offsets do not count as spending." />
           <Panel className="mt-5">
             <div className="flex flex-wrap items-end justify-between gap-5"><div><p className="text-sm text-[var(--text-muted)]">Current period</p><p className="mt-1 text-lg font-semibold">{formatDate(view.weeklySpending.periodStart)} – {formatDate(view.weeklySpending.periodEnd)}</p></div><div className="text-left sm:text-right"><p className="text-sm text-[var(--text-muted)]">Weekly target</p><p className="mt-1 text-3xl font-semibold">{formatMoney(view.weeklySpending.target)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{formatMoney(view.weeklySpending.dailyTarget)} per day reference</p></div></div>
             <div className="mt-7"><div className="flex justify-between text-sm"><span className="text-[var(--text-muted)]">Eligible spending</span><span className="font-semibold">{formatMoney(view.weeklySpending.eligibleSpending)} · {percent(view.weeklySpending.spendingPercentage)}</span></div><ProgressBar value={weeklyProgress} className="mt-3 h-3" /></div>
@@ -404,8 +411,8 @@ export default async function Home() {
           </Panel>
         </section>
 
-        <section className="mt-12">
-          <SectionHeader eyebrow="Financial plan" title="Every paycheck has a job" detail="The configured plan keeps investing, bills, weekly spending, and cushion visible at the same time." />
+        {(legacyExampleMode || profile.paychecks || profile.roth || profile.bills || profile.weeklySpending) && <section className="mt-12">
+          <SectionHeader eyebrow="Legacy plan details" title="Additional plan details" detail="These optional legacy fields remain available for backward compatibility and the development example mode." />
           <div className="mt-5 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
             <Panel>
               <div className="flex flex-wrap items-end justify-between gap-4"><div><h3 className="text-base font-semibold">Recurring monthly outlook</h3><p className="mt-1 text-xs text-[var(--text-muted)]">Profile-based estimates; they may exclude irregular expenses or obligations that have not been entered.</p></div><p className="text-sm text-[var(--text-muted)]">{nextPaycheck ? `Next planned: ${formatDate(nextPaycheck.date)}` : "No future payday configured"}</p></div>
@@ -423,15 +430,15 @@ export default async function Home() {
               {profile.roth ? <><div className="flex items-end justify-between gap-4"><div><h3 className="font-semibold">Retirement contribution schedule</h3><p className="mt-1 text-sm text-[var(--text-muted)]">Configured remaining: {formatMoney(view.financialPlan.rothRemaining)}</p></div><p className="text-sm font-semibold text-[var(--accent-ink)]">{formatMoney(rothPlannedTotal)} planned</p></div><div className="mt-5 divide-y divide-[var(--border)]">{view.financialPlan.rothContributions.map((contribution) => <div key={contribution.date} className="flex items-center justify-between gap-4 py-3 first:pt-0"><span className="text-sm text-[var(--text-muted)]">{formatDate(contribution.date)}{contribution.mayExecuteOnNextTradingDay ? " · next trading day" : ""}</span><span className="font-semibold">{formatMoney(contribution.amount)}</span></div>)}</div></> : <><h3 className="font-semibold">Retirement contribution schedule</h3><p className="mt-2 text-sm text-[var(--text-muted)]">No dated contribution schedule is configured.</p></>}
             </Panel>
           </div>
+        </section>}
+
+        <section className="mt-12">
+          <SectionHeader eyebrow="Connected activity" title="Invested money, by purpose" detail="Holdings, allocation, cash, and gains are shown only where connected data supports them." />
+          <div className="mt-5 grid gap-4 lg:grid-cols-2"><PortfolioTable title="Taxable equities" position={view.financialPosition.equities} currency={profile.currency} /><PortfolioTable title="Retirement accounts" position={view.financialPosition.retirement} currency={profile.currency} /></div>
         </section>
 
         <section className="mt-12">
-          <SectionHeader eyebrow="Portfolio analysis" title="Invested money, by purpose" detail="Holdings, allocation, cash, and gains are shown only where connected data supports them." />
-          <div className="mt-5 grid gap-4 lg:grid-cols-2"><PortfolioTable title="Taxable equities" position={view.financialPosition.equities} currency={profile.currency} /><PortfolioTable title="Roth IRA" position={view.financialPosition.retirement} currency={profile.currency} /></div>
-        </section>
-
-        <section className="mt-12">
-          <SectionHeader eyebrow="Portfolio growth" title="All-time invested value" detail="Securities-only portfolio observations across taxable Equities and Retirement." />
+          <SectionHeader eyebrow="Connected activity" title="Portfolio growth" detail="Securities-only portfolio observations across connected investment accounts." />
           <Panel className="mt-5">
             <div className="flex flex-wrap items-end justify-between gap-5">
               <div><p className="text-xs text-[var(--text-muted)]">Current invested portfolio value</p><p className="mt-1 text-3xl font-semibold tracking-tight">{formatMoney(currentInvestedPortfolioValue)}</p></div>
@@ -443,7 +450,7 @@ export default async function Home() {
 
         <section className="mt-12 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel>
-            <div className="flex items-end justify-between gap-4"><SectionHeader eyebrow="Cash flow" title="Recent financial rhythm" /><div className="text-right"><p className="text-xs text-[var(--text-muted)]">Actual transactions · this month</p><p className="mt-1 text-sm font-semibold">{formatMoney(view.monthly.income)} in · {formatMoney(view.monthly.spending)} out</p></div></div>
+            <div className="flex items-end justify-between gap-4"><SectionHeader eyebrow="Connected activity" title="Recent financial rhythm" /><div className="text-right"><p className="text-xs text-[var(--text-muted)]">Actual transactions · this month</p><p className="mt-1 text-sm font-semibold">{formatMoney(view.monthly.income)} in · {formatMoney(view.monthly.spending)} out</p></div></div>
             <div className="mt-7 flex h-36 items-end gap-3">{view.monthlyHistory.map((item) => <div key={item.label} className="flex min-w-0 flex-1 flex-col items-center gap-2"><div className="flex h-28 items-end gap-1"><i className="w-2 rounded-t bg-[var(--accent)]" style={{ height: `${Math.max((item.income / chartMax) * 100, item.income ? 4 : 0)}%` }} /><i className="w-2 rounded-t bg-[var(--text)]" style={{ height: `${Math.max((item.spending / chartMax) * 100, item.spending ? 4 : 0)}%` }} /></div><span className="text-xs text-[var(--text-muted)]">{item.label}</span></div>)}</div>
           </Panel>
           <Panel>
@@ -454,7 +461,7 @@ export default async function Home() {
 
         <section className="mt-12 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
           <Panel>
-            <SectionHeader eyebrow="Recent activity" title="Latest transactions" />
+            <SectionHeader eyebrow="Connected activity" title="Latest transactions" />
             <div className="mt-5 divide-y divide-[var(--border)]">{recent.length === 0 ? <Empty>No recent transactions available.</Empty> : recent.slice(0, 8).map((transaction) => { const amount = number(transaction.amount); return <div key={transaction.id} className="flex justify-between gap-4 py-3 first:pt-0"><div className="min-w-0"><p className="truncate text-sm font-medium">{transaction.merchant_name ?? transaction.name ?? "Unknown transaction"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{transaction.date} · {transactionCategory(transaction)}{transaction.pending ? " · Pending" : ""}</p></div><p className={amount != null && amount < 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold"}>{formatMoney(amount)}</p></div>; })}</div>
           </Panel>
           <Panel>
