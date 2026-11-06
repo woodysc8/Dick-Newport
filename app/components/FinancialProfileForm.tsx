@@ -255,6 +255,6 @@ function ErrorMessage({ message }: { message?: string }) { return message ? <p r
 function AddButton({ onClick, children }: { onClick: () => void; children: React.ReactNode }) { return <button type="button" onClick={onClick} className={secondaryButton}>{children}</button>; }
 function Remove({ onClick, label }: { onClick: () => void; label: string }) { return <button type="button" aria-label={label} onClick={onClick} className={`${secondaryButton} mt-3`}>Remove</button>; }
 
-const cardClass = "rounded-xl border border-[var(--border)] bg-white p-4";
-const inputClass = "mt-1 w-full rounded-lg border border-[var(--border)] bg-white px-3 py-2.5 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]";
+const cardClass = "rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] p-4 shadow-[var(--shadow-soft)]";
+const inputClass = "mt-1 w-full rounded-xl border border-[var(--border)] bg-[var(--surface-strong)] px-3 py-2.5 text-sm text-[var(--text)] outline-none focus:border-[var(--accent)]";
 const secondaryButton = "rounded-lg border border-[var(--border)] px-3 py-2 text-sm font-medium hover:bg-[var(--surface)]";

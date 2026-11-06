@@ -17,10 +17,14 @@ export function isCashEquivalentAsset(asset: InvestmentAssetValue): boolean {
   return ticker === "CUR:USD" || name === "CUR:USD" || name === "CURRENCY: USD" || (currency === "USD" && name === "USD");
 }
 
-export function calculateSecuritiesOnlyValue(assets: readonly InvestmentAssetValue[]): number {
-  return assets.reduce((total, asset) => {
-    if (isCashEquivalentAsset(asset)) return total;
-    const value = Number(asset.value);
-    return Number.isFinite(value) ? total + value : total;
-  }, 0);
+export function calculateSecuritiesOnlyValue(assets: readonly InvestmentAssetValue[]): number | null {
+  const securities = assets.filter((asset) => !isCashEquivalentAsset(asset));
+  if (securities.length === 0) return null;
+
+  const currencies = new Set(securities.map((asset) => normalized(asset.currency)).filter(Boolean));
+  if (currencies.size !== 1 || securities.some((asset) => !normalized(asset.currency))) return null;
+
+  const values = securities.map((asset) => Number(asset.value));
+  if (values.some((value) => !Number.isFinite(value))) return null;
+  return values.reduce((total, value) => total + value, 0);
 }

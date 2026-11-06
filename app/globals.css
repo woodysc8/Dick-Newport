@@ -1,15 +1,18 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #FFFFFF;
-  --surface: #F6F7F5;
-  --border: #E4E7E2;
-  --text: #0B0F0C;
-  --text-muted: #667068;
-  --accent: #14C26A;
-  --accent-ink: #06210F;
-  --up: #14A85C;
-  --down: #E5484D;
+  --bg: #fbfcfb;
+  --surface: #f3f5f3;
+  --surface-strong: #ffffff;
+  --border: #e6e9e6;
+  --text: #101411;
+  --text-muted: #737b75;
+  --accent: #16794a;
+  --accent-soft: #e9f4ed;
+  --accent-ink: #0d4c2d;
+  --up: #16834e;
+  --down: #c94b4b;
+  --shadow-soft: 0 12px 35px rgb(16 20 17 / 5%);
 
   --background: var(--bg);
   --foreground: var(--text);
@@ -22,15 +25,31 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  letter-spacing: -0.01em;
+}
+
+button, a { transition: background-color 150ms ease, color 150ms ease, border-color 150ms ease, opacity 150ms ease; }
+
+@media (max-width: 640px) {
+  body { padding-bottom: 4.75rem; }
+  .finance-nav {
+    position: fixed;
+    z-index: 40;
+    right: 0.75rem;
+    bottom: 0.75rem;
+    left: 0.75rem;
+    justify-content: space-between;
+    overflow-x: auto;
+    padding: 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    background: rgb(255 255 255 / 94%);
+    box-shadow: var(--shadow-soft);
+    backdrop-filter: blur(14px);
+  }
+  .finance-nav-link { padding: 0.6rem 0.7rem; font-size: 0.7rem; }
 }

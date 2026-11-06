@@ -12,6 +12,8 @@ import { getSpendingPeriod } from "../lib/financialPlan";
 import { LEGACY_EXAMPLE_FINANCIAL_PROFILE, STARTER_FINANCIAL_PROFILE, type FinancialProfile } from "../lib/financialProfileDefaults";
 import { normalizeFinancialProfile } from "../lib/financialProfileNormalization";
 import { createSupabaseServerClient, ensureOwnProfile } from "../lib/supabase/server";
+import PlaidConnect, { PlaidConnectShortcut } from "./components/PlaidConnect";
+import FinanceNav from "./components/FinanceNav";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -120,7 +122,7 @@ function SectionHeader({ eyebrow, title, detail }: { eyebrow: string; title: str
 }
 
 function Panel({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-lg border border-[var(--border)] bg-white p-5 ${className}`}>{children}</div>;
+  return <div className={`finance-panel rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] p-5 sm:p-6 ${className}`}>{children}</div>;
 }
 
 function Empty({ children }: { children: ReactNode }) {
@@ -269,7 +271,6 @@ export default async function Home() {
     ? LEGACY_EXAMPLE_FINANCIAL_PROFILE
     : isFinancialProfile(storedProfile) ? storedProfile : STARTER_FINANCIAL_PROFILE;
   const normalizedProfile = normalizeFinancialProfile(profile);
-  if (!legacyExampleMode && !profile.onboardingCompletedAt) redirect("/onboarding");
   const formatMoney = (value: number | string | null | undefined) => money(value, profile.currency);
   const formatAggregate = (value: number | null, currency: string | null, mixedCurrency: boolean) =>
     mixedCurrency || !currency ? "Unavailable" : money(value, currency);
@@ -305,17 +306,94 @@ export default async function Home() {
     ? view.financialPosition.equities.investedValue + view.financialPosition.retirement.investedValue
     : null;
 
+  const connectedAccounts = accounts.slice(0, 5);
+  const manualAccounts = profile.financialAccounts?.slice(0, Math.max(0, 5 - connectedAccounts.length)) ?? [];
+  const connectedInvestmentValue = view.connectedAccountSummary.investments;
+  const manualInvestmentValue = view.profileAccountBalances.investments;
+  const nextSteps: Array<{ title: string; detail: string; href: string; action: string }> = [];
+  if (accounts.length === 0) nextSteps.push({ title: "Connect your accounts", detail: "See live balances and activity in one place.", href: "#connect-account", action: "Connect accounts" });
+  if (view.financialPlanning.income.status === "unavailable") nextSteps.push({ title: "Set up your income", detail: "Calculate monthly cash flow using take-home pay.", href: "/paychecks", action: "Set up income" });
+  if (profile.weeklySpending?.weeklyTarget == null) nextSteps.push({ title: "Set a weekly spending target", detail: "Make day-to-day spending easier to track.", href: "/budget", action: "Set target" });
+  if (!profile.goals?.length) nextSteps.push({ title: "Create a financial goal", detail: "Give your next savings priority a clear target.", href: "/goals", action: "Create goal" });
+
   return (
-    <main className="min-h-screen bg-[var(--bg)] text-[var(--text)]">
-      <div className="mx-auto max-w-7xl px-5 py-7 sm:px-8 lg:py-10">
+    <main className="min-h-screen overflow-x-hidden bg-[var(--bg)] text-[var(--text)]">
+      <div className="mx-auto max-w-7xl px-5 py-6 sm:px-8 lg:py-9">
+        <header className="flex flex-wrap items-start justify-between gap-6 border-b border-[var(--border)] pb-7">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Dick-Newport</p>
+            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] sm:text-5xl">Overview</h1>
+            <p className="mt-2 text-sm text-[var(--text-muted)]">Your financial picture at a glance.</p>
+          </div>
+          <div className="flex flex-wrap items-center justify-end gap-3"><PlaidConnect /><a href="/settings/profile" className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Profile</a><form action={signOut}><button className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
+        </header>
+        <div className="mt-5 overflow-x-auto"><FinanceNav active="Overview" /></div>
+
+        {legacyExampleMode && <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Development example data is active.</p>}
+
+        <section className="mt-10">
+          <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Financial snapshot</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Your money</h2></div><a href="/accounts" className="text-sm font-medium text-[var(--accent)] hover:underline">View accounts</a></div>
+          <Panel className="mt-5">
+            <div className="grid gap-y-7 sm:grid-cols-2 lg:grid-cols-4 lg:gap-x-8">
+              <div><p className="text-sm text-[var(--text-muted)]">Net worth</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">{formatAggregate(view.overallPosition.netWorth, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">Based on recorded assets and debts</p></div>
+              <div><p className="text-sm text-[var(--text-muted)]">Cash</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">{formatAggregate(view.accountSummary.cash, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{view.accountSummary.cash === 0 ? "No cash balances recorded" : "Recorded cash balances"}</p></div>
+              <div><p className="text-sm text-[var(--text-muted)]">Investments</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">{formatAggregate(view.accountSummary.investments, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{manualInvestmentValue != null && manualInvestmentValue > 0 ? "Includes manually entered accounts" : connectedInvestmentValue != null ? "Connected investment balances" : "No investment balances recorded"}</p></div>
+              <div><p className="text-sm text-[var(--text-muted)]">Debt</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em] sm:text-4xl">{formatAggregate(view.accountSummary.credit, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{view.accountSummary.credit === 0 ? "No debt balances recorded" : "Recorded debt balances"}</p></div>
+            </div>
+          </Panel>
+        </section>
+
+        <section className="mt-12">
+          <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Monthly cash flow</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">What is coming in and going out</h2></div><div className="flex gap-4 text-sm"><a href="/paychecks" className="font-medium text-[var(--accent)] hover:underline">Income</a><a href="/budget" className="font-medium text-[var(--accent)] hover:underline">Budget</a></div></div>
+          <Panel className="mt-5">
+            <div className="divide-y divide-[var(--border)]">
+              {[
+                ["Take-home income", view.financialPlanning.income.estimatedMonthlyTakeHomeIncome, view.financialPlanning.income.status === "unavailable" ? "Set up income" : view.financialPlanning.income.status === "partial" ? "Partial estimate" : "Monthly estimate"],
+                ["Recurring expenses", view.financialPlanning.recurringExpenses.estimatedMonthlyExpenses, view.financialPlanning.recurringExpenses.status === "unavailable" ? "Set up your budget" : view.financialPlanning.recurringExpenses.status === "partial" ? "Partial estimate" : "Monthly estimate"],
+                ["Debt payments", view.financialPlanning.debtPayments.monthlyAmount, view.financialPlanning.debtPayments.status === "unavailable" ? "Add debt payments" : "Monthly estimate"],
+                ["Savings allocations", view.financialPlanning.savingsAllocations.monthlyAmount, view.financialPlanning.savingsAllocations.status === "unavailable" ? "Add savings plans" : "Monthly estimate"],
+                ["Remaining monthly cash", view.financialPlanning.remainingMonthlyCash, view.financialPlanning.remainingMonthlyCash == null ? "Complete your cash flow setup" : "After planned outgoings"],
+              ].map(([label, value, detail]) => <div key={label} className="flex items-center justify-between gap-4 py-4"><span className="text-sm text-[var(--text-muted)]">{label}</span><span className="text-right"><strong className={`block text-lg font-semibold ${label === "Remaining monthly cash" && typeof value === "number" && value >= 0 ? "text-[var(--up)]" : ""}`}>{typeof value === "number" ? formatMoney(value) : detail}</strong>{typeof value === "number" && <small className="text-xs text-[var(--text-muted)]">{detail}</small>}</span></div>)}
+            </div>
+          </Panel>
+        </section>
+
+        <section className="mt-12" id="accounts">
+          <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Your accounts</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Balances in one place</h2></div><a href="/accounts" className="text-sm font-medium text-[var(--accent)] hover:underline">See all</a></div>
+          <Panel className="mt-5">
+            {connectedAccounts.length === 0 && manualAccounts.length === 0 ? <div id="connect-account" className="py-3"><p className="font-medium">Connect your first account</p><p className="mt-1 text-sm text-[var(--text-muted)]">Bring in live balances while keeping your manual estimates separate.</p><PlaidConnectShortcut /></div> : <div className="divide-y divide-[var(--border)]">{connectedAccounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.account_name ?? "Unnamed account"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{account.institution_name ?? "Connected account"} · {account.account_type ?? "Account"} · <span className="text-[var(--accent)]">Connected</span></p></div><p className="shrink-0 text-sm font-semibold">{account.current_balance == null ? "Unknown" : money(Number(account.current_balance), account.currency ?? profile.currency)}</p></div>)}{manualAccounts.map((account, index) => <div key={`${account.name}-${index}`} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.name}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{account.institutionLabel ?? "Manually entered"} · {account.accountType} · <span className="text-[var(--accent)]">Manual</span></p></div><p className="shrink-0 text-sm font-semibold">{account.balance == null ? "Unknown" : money(account.balance, account.currency ?? profile.currency)}</p></div>)}</div>}
+          </Panel>
+        </section>
+
+        <section className="mt-12">
+          <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Investments</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Your portfolio</h2></div><a href="/investments" className="text-sm font-medium text-[var(--accent)] hover:underline">View investments</a></div>
+          <Panel className="mt-5">
+            <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-[var(--text-muted)]">Total recorded investment value</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em]">{formatAggregate(view.accountSummary.investments, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{manualInvestmentValue != null && manualInvestmentValue > 0 ? `Manual accounts: ${formatMoney(manualInvestmentValue)}` : "Connected accounts only"}</p></div>{view.portfolioGrowth.changeSinceFirstSnapshot != null && view.portfolioGrowth.currency && <p className={view.portfolioGrowth.changeSinceFirstSnapshot >= 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold text-[var(--down)]"}>{signedMoney(view.portfolioGrowth.changeSinceFirstSnapshot, view.portfolioGrowth.currency)} since first snapshot</p>}</div>
+            {view.financialPosition.equities.holdings.length + view.financialPosition.retirement.holdings.length > 0 ? <div className="mt-5 divide-y divide-[var(--border)]">{[...view.financialPosition.equities.holdings, ...view.financialPosition.retirement.holdings].slice(0, 3).map((holding) => <div key={holding.id} className="flex items-center justify-between gap-4 py-3 text-sm"><span>{holding.security_name ?? holding.ticker_symbol ?? "Unnamed holding"}</span><span>{holding.institution_value == null || !portfolioCurrency ? "Unknown" : money(Number(holding.institution_value), portfolioCurrency)}</span></div>)}</div> : <div className="mt-5"><p className="text-sm text-[var(--text-muted)]">No connected investment data yet.</p><a href="/investments" className="mt-2 inline-block text-sm font-medium text-[var(--accent)] hover:underline">Explore Investments →</a></div>}
+          </Panel>
+        </section>
+
+        <section className="mt-12">
+          <div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">What’s next</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Small steps, clearer picture</h2></div>
+          <Panel className="mt-5">{nextSteps.slice(0, 3).length > 0 ? <div className="divide-y divide-[var(--border)]">{nextSteps.slice(0, 3).map((step) => <div key={step.title} className="flex flex-wrap items-center justify-between gap-4 py-4 first:pt-0 last:pb-0"><div><p className="font-medium">{step.title}</p><p className="mt-1 text-sm text-[var(--text-muted)]">{step.detail}</p></div><a href={step.href} className="rounded-full bg-[var(--accent-soft)] px-4 py-2 text-sm font-medium text-[var(--accent-ink)]">{step.action}</a></div>)}</div> : <p className="text-sm text-[var(--text-muted)]">You’re all set for now. Review your accounts as they update.</p>}</Panel>
+        </section>
+      </div>
+    </main>
+  );
+
+  /*
+  return (
+    <main className="min-h-screen overflow-x-hidden bg-[var(--bg)] text-[var(--text)]">
+      <div className="mx-auto max-w-7xl px-5 py-6 sm:px-8 lg:py-9">
         <header className="flex flex-wrap items-start justify-between gap-6 border-b border-[var(--border)] pb-7">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-[var(--accent-ink)]">Personal finance · financial operating system</p>
-            <h1 className="mt-3 text-4xl font-semibold tracking-tight">Dick-Newport</h1>
+            <h1 className="mt-3 text-4xl font-semibold tracking-[-0.05em] sm:text-5xl">Dick-Newport</h1>
             <p className="mt-2 max-w-xl text-sm leading-6 text-[var(--text-muted)]">A clear view of your financial picture, with connected data and profile estimates kept distinct.</p>
           </div>
-          <div className="flex flex-wrap items-center gap-3"><span className="text-xs text-[var(--text-muted)]">Plaid connections paused</span><a href="/settings/profile" className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Financial profile</a><form action={signOut}><button className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
+          <div className="flex flex-wrap items-center justify-end gap-3"><PlaidConnect /><a href="/settings/profile" className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Financial profile</a><form action={signOut}><button className="rounded border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
         </header>
+        <div className="mt-5 overflow-x-auto"><FinanceNav active="Overview" /></div>
 
         {legacyExampleMode && <p className="mt-5 rounded border border-amber-300 bg-amber-50 p-3 text-sm">Development example plan is active. These planning values are not saved as your financial profile.</p>}
 
@@ -492,4 +570,5 @@ export default async function Home() {
       </div>
     </main>
   );
+  */
 }

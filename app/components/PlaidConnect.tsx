@@ -1,250 +1,241 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePlaidLink } from "react-plaid-link";
 
-type RefreshResponse = {
+type LinkTokenResponse = {
+  link_token?: string;
+  expiration?: string;
+};
+
+export type PlaidLinkToken = { token: string; expiration: string };
+
+const PLAID_EVENT_NAMES = new Set([
+  "OPEN",
+  "EXIT",
+  "HANDOFF",
+  "SELECT_INSTITUTION",
+  "ERROR",
+  "BANK_INCOME_INSIGHTS_COMPLETED",
+  "IDENTITY_MATCH_FAILED",
+  "IDENTITY_MATCH_PASSED",
+  "IDENTITY_VERIFICATION_PASS_SESSION",
+  "IDENTITY_VERIFICATION_FAIL_SESSION",
+  "LAYER_READY",
+  "LAYER_NOT_AVAILABLE",
+  "LAYER_AUTOFILL_NOT_AVAILABLE",
+]);
+
+export function isPlaidLinkTokenExpired(expiration: string, now = Date.now()): boolean {
+  const expiresAt = Date.parse(expiration);
+  return !Number.isFinite(expiresAt) || expiresAt <= now;
+}
+
+export function safePlaidCode(code: string | null | undefined): string | null {
+  return code && /^[A-Z0-9_]{1,64}$/.test(code) ? code : null;
+}
+
+export type RefreshResponse = {
   success: boolean;
-  error?: string;
-  items?: Array<{
+  status: "completed" | "in_progress";
+  items: Array<{
     institution: string;
+    plaid_item_id: string;
     status: "success" | "error";
+    accounts_updated: number;
+    accounts_created: number;
     transactions_added: number;
     transactions_modified: number;
     transactions_removed: number;
-    accounts_updated: number;
-    accounts_created: number;
     holdings_updated: number;
-    errors: string[];
+    holdings_removed: number;
+    error_count: number;
+    warning_count: number;
   }>;
 };
 
-type PlaidConnectProps = {
-  investmentPlaidItemId?: string | null;
-};
+export async function requestPlaidLinkToken(): Promise<PlaidLinkToken> {
+  const response = await fetch("/api/plaid/create-link-token", { method: "POST" });
+  const data = (await response.json()) as LinkTokenResponse & { error?: string };
+  if (!response.ok || !data.link_token || !data.expiration) {
+    throw new Error("Unable to prepare Plaid connection. Please try again.");
+  }
+  return { token: data.link_token, expiration: data.expiration };
+}
 
-export default function PlaidConnect({ investmentPlaidItemId }: PlaidConnectProps) {
+export async function exchangePlaidPublicToken(publicToken: string): Promise<void> {
+  const response = await fetch("/api/plaid/exchange-token", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ public_token: publicToken }),
+  });
+  const data = (await response.json()) as { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Unable to save Plaid connection");
+}
+
+export async function requestPlaidRefresh(): Promise<RefreshResponse> {
+  const response = await fetch("/api/plaid/refresh", { method: "POST" });
+  const data = (await response.json()) as RefreshResponse & { error?: string };
+  if (!response.ok) throw new Error(data.error ?? "Unable to refresh Plaid connections");
+  return data;
+}
+
+export function openPlaidLink(open: () => void, ready: boolean): void {
+  if (ready) open();
+}
+
+export function PlaidConnectShortcut() {
+  return (
+    <button
+      type="button"
+      onClick={() => document.getElementById("plaid-connect-button")?.click()}
+      className="mt-4 inline-block rounded border border-[var(--border)] px-3 py-2 text-sm font-medium"
+    >
+      Connect a bank
+    </button>
+  );
+}
+
+function refreshSummary(data: RefreshResponse): { message: string; error: boolean } {
+  if (data.status === "in_progress") return { message: "A refresh is already in progress.", error: false };
+  const failedItems = data.items.filter((item) => item.status === "error").length;
+  const changes = data.items.reduce(
+    (total, item) => total + item.transactions_added + item.transactions_modified + item.transactions_removed,
+    0,
+  );
+  if (!data.success || failedItems > 0) {
+    return {
+      message: failedItems > 0
+        ? `Refresh completed with ${failedItems} connection${failedItems === 1 ? "" : "s"} needing attention.`
+        : "Refresh completed with errors.",
+      error: true,
+    };
+  }
+  return { message: `Financial data refreshed (${changes} transaction changes).`, error: false };
+}
+
+export default function PlaidConnect() {
   const router = useRouter();
-  const [linkToken, setLinkToken] = useState<string | null>(null);
-  const [investmentUpdateLinkToken, setInvestmentUpdateLinkToken] = useState<string | null>(null);
-  const [biltRepairLinkToken, setBiltRepairLinkToken] = useState<string | null>(null);
-  const [linkStatus, setLinkStatus] = useState("");
-  const [refreshStatus, setRefreshStatus] = useState("");
-  const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [investmentConsentStatus, setInvestmentConsentStatus] = useState("");
-  const [investmentConsentError, setInvestmentConsentError] = useState<string | null>(null);
-  const [biltRepairStatus, setBiltRepairStatus] = useState("");
-  const [biltRepairError, setBiltRepairError] = useState<string | null>(null);
-  const [isPreparingBiltRepair, setIsPreparingBiltRepair] = useState(false);
-  const [isPreparingInvestmentConsent, setIsPreparingInvestmentConsent] = useState(false);
-  const [shouldOpenInvestmentUpdate, setShouldOpenInvestmentUpdate] = useState(false);
-  const [shouldOpenBiltRepair, setShouldOpenBiltRepair] = useState(false);
+  const [linkToken, setLinkToken] = useState<PlaidLinkToken | null>(null);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isLinkOpen, setIsLinkOpen] = useState(false);
+  const tokenRequestInFlight = useRef(false);
+  const linkOpenInProgress = useRef(false);
 
-  const refreshFinancialData = useCallback(async () => {
-    if (isRefreshing) return false;
-    setIsRefreshing(true);
-    setRefreshStatus("Refreshing financial data...");
-    setRefreshError(null);
-    try {
-      const response = await fetch("/api/plaid/refresh", { method: "POST" });
-      const data = (await response.json()) as RefreshResponse;
-      const failedItems = data.items?.filter((item) => item.status === "error") ?? [];
-      if (!response.ok || !data.success || failedItems.length > 0) {
-        const details = failedItems.map((item) => `${item.institution}: ${item.errors.join(", ")}`).join("; ");
-        throw new Error((data.error ?? details) || "Financial refresh failed");
-      }
-      const changes = (data.items ?? []).reduce(
-        (total, item) => total + item.transactions_added + item.transactions_modified + item.transactions_removed,
-        0
-      );
-      setRefreshStatus(`Financial data refreshed (${changes} transaction changes).`);
-      router.refresh();
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Financial refresh failed";
-      console.error("Financial refresh error:", message);
-      setRefreshStatus("");
-      setRefreshError(message);
-      return false;
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, [isRefreshing, router]);
+  const refreshAfterExchange = useCallback(async () => {
+    const data = await requestPlaidRefresh();
+    const summary = refreshSummary(data);
+    setStatus(summary.message);
+    setError(summary.error ? summary.message : null);
+    if (!summary.error && data.status === "completed") router.refresh();
+  }, [router]);
 
   const createLinkToken = async () => {
-    setLinkStatus("Connecting to Plaid...");
+    if (tokenRequestInFlight.current || isLoading) return;
+    tokenRequestInFlight.current = true;
+    setIsLoading(true);
+    setError(null);
+    setStatus("Preparing a secure Plaid connection...");
     try {
-      const response = await fetch("/api/plaid/create-link-token", { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || data.details || "Failed to create link token");
-      setLinkToken(data.link_token);
-      setLinkStatus("");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Plaid Link setup error:", message);
-      setLinkStatus(message);
-    }
-  };
-
-  const createInvestmentUpdateLinkToken = async () => {
-    if (!investmentPlaidItemId || isPreparingInvestmentConsent || investmentUpdateLinkToken) return;
-    setIsPreparingInvestmentConsent(true);
-    setInvestmentConsentStatus("Preparing Investment consent...");
-    setInvestmentConsentError(null);
-    try {
-      const response = await fetch("/api/plaid/create-investment-update-link-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plaid_item_id: investmentPlaidItemId }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Unable to prepare Investment consent");
-      setInvestmentUpdateLinkToken(data.link_token);
-      setShouldOpenInvestmentUpdate(true);
-      setInvestmentConsentStatus("Opening Plaid to enable Investment Holdings...");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Investment consent setup error:", message);
-      setInvestmentConsentStatus("");
-      setInvestmentConsentError(message);
+      setLinkToken(await requestPlaidLinkToken());
+      setStatus("Ready to connect.");
+    } catch {
+      setStatus("Could not prepare a Plaid connection.");
+      setError("Please try again. If the problem continues, contact support.");
     } finally {
-      setIsPreparingInvestmentConsent(false);
-    }
-  };
-
-  const createBiltRepairLinkToken = async () => {
-    if (isPreparingBiltRepair || biltRepairLinkToken || isRefreshing) return;
-    setIsPreparingBiltRepair(true);
-    setBiltRepairStatus("Preparing Bilt repair...");
-    setBiltRepairError(null);
-    try {
-      const response = await fetch("/api/plaid/create-bilt-repair-link-token", { method: "POST" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Unable to prepare Bilt repair");
-      setBiltRepairLinkToken(data.link_token);
-      setShouldOpenBiltRepair(true);
-      setBiltRepairStatus("Opening Plaid to repair the existing Bilt connection...");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      setBiltRepairStatus("");
-      setBiltRepairError(message);
-    } finally {
-      setIsPreparingBiltRepair(false);
+      tokenRequestInFlight.current = false;
+      setIsLoading(false);
     }
   };
 
   const onSuccess = useCallback(async (publicToken: string | null) => {
+    linkOpenInProgress.current = false;
+    setIsLinkOpen(false);
+    setLinkToken(null);
     if (!publicToken) {
-      setLinkStatus("Plaid did not return a public token.");
+      setStatus("Plaid did not complete the connection.");
+      setError("Plaid did not return a public token.");
       return;
     }
-    setLinkStatus("Finalizing your connection...");
+    setIsLoading(true);
+    setError(null);
+    setStatus("Saving your secure connection...");
     try {
-      const response = await fetch("/api/plaid/exchange-token", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ public_token: publicToken }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || data.details || "Failed exchange");
-      setLinkStatus("Plaid connection successful.");
-      await refreshFinancialData();
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.error("Plaid exchange error:", message);
-      setLinkStatus(message);
+      await exchangePlaidPublicToken(publicToken);
+      setStatus("Connection saved. Refreshing financial data...");
+      await refreshAfterExchange();
+    } catch {
+      setStatus("Plaid returned successfully, but the connection could not be completed.");
+      setError("Please start a new attempt. If the problem continues, contact support.");
+    } finally {
+      setIsLoading(false);
     }
-  }, [refreshFinancialData]);
+  }, [refreshAfterExchange]);
 
-  const onInvestmentUpdateSuccess = useCallback(async () => {
-    // Update-mode Link preserves the existing Item and access token. Never exchange its public token.
-    setInvestmentConsentStatus("Investment consent granted. Refreshing holdings...");
-    setInvestmentConsentError(null);
-    const refreshed = await refreshFinancialData();
-    if (refreshed) {
-      setInvestmentConsentStatus("Investment Holdings enabled.");
-      setInvestmentUpdateLinkToken(null);
-    } else {
-      setInvestmentConsentError("Consent was completed, but the financial refresh did not succeed. Try Refresh Financial Data.");
-    }
-  }, [refreshFinancialData]);
-
-  const onBiltRepairSuccess = useCallback(async () => {
-    setBiltRepairStatus("Bilt connection repaired. Refreshing financial data...");
-    setBiltRepairError(null);
-    const refreshed = await refreshFinancialData();
-    if (refreshed) {
-      setBiltRepairStatus("Bilt connection repaired and financial data refreshed.");
-      setBiltRepairLinkToken(null);
-    } else {
-      setBiltRepairError("Bilt repair completed, but the financial refresh did not succeed.");
-    }
-  }, [refreshFinancialData]);
-
-  const onBiltRepairExit = useCallback((error: { error_message?: string } | null) => {
-    setShouldOpenBiltRepair(false);
-    setBiltRepairLinkToken(null);
-    if (error?.error_message) {
-      setBiltRepairStatus("");
-      setBiltRepairError(error.error_message);
-    } else {
-      setBiltRepairStatus("Bilt repair was canceled.");
-    }
+  const onExit = useCallback((linkError: { error_code: string } | null) => {
+    linkOpenInProgress.current = false;
+    setIsLinkOpen(false);
+    setLinkToken(null);
+    setIsLoading(false);
+    setError(null);
+    const code = safePlaidCode(linkError?.error_code);
+    setStatus(code
+      ? `Plaid ended the connection (${code}). Start another attempt to try again.`
+      : "Connection closed before completion. Start another attempt to try again.");
   }, []);
 
-  const { open, ready } = usePlaidLink({ token: linkToken, onSuccess });
-  const {
-    open: openInvestmentUpdate,
-    ready: investmentUpdateReady,
-  } = usePlaidLink({ token: investmentUpdateLinkToken, onSuccess: onInvestmentUpdateSuccess });
-  const {
-    open: openBiltRepair,
-    ready: biltRepairReady,
-  } = usePlaidLink({ token: biltRepairLinkToken, onSuccess: onBiltRepairSuccess, onExit: onBiltRepairExit });
+  const onEvent = useCallback((eventName: string, metadata: { error_code: string | null }) => {
+    if (!PLAID_EVENT_NAMES.has(eventName)) return;
+    const code = safePlaidCode(metadata.error_code);
+    // Deliberately record only allow-listed event names and sanitized error codes.
+    console.info("Plaid Link event", code ? { eventName, errorCode: code } : { eventName });
+  }, []);
 
-  useEffect(() => {
-    if (shouldOpenInvestmentUpdate && investmentUpdateLinkToken && investmentUpdateReady) {
-      setShouldOpenInvestmentUpdate(false);
-      openInvestmentUpdate();
-    }
-  }, [investmentUpdateLinkToken, investmentUpdateReady, openInvestmentUpdate, shouldOpenInvestmentUpdate]);
+  const { open, ready } = usePlaidLink({ token: linkToken?.token ?? null, onSuccess, onExit, onEvent });
 
-  useEffect(() => {
-    if (shouldOpenBiltRepair && biltRepairLinkToken && biltRepairReady) {
-      setShouldOpenBiltRepair(false);
-      openBiltRepair();
+  const openLink = () => {
+    if (!linkToken || !ready || isLoading || linkOpenInProgress.current) return;
+    if (isPlaidLinkTokenExpired(linkToken.expiration)) {
+      setLinkToken(null);
+      setStatus("This Plaid session expired. Start another attempt to get a fresh session.");
+      setError(null);
+      return;
     }
-  }, [biltRepairLinkToken, biltRepairReady, openBiltRepair, shouldOpenBiltRepair]);
+    linkOpenInProgress.current = true;
+    setIsLinkOpen(true);
+    setError(null);
+    setStatus("Opening Plaid Link...");
+    try {
+      openPlaidLink(open, ready);
+    } catch {
+      linkOpenInProgress.current = false;
+      setIsLinkOpen(false);
+      setLinkToken(null);
+      setStatus("Plaid could not be opened.");
+      setError("Start another attempt to try again.");
+    }
+  };
 
   return (
-    <div className="flex flex-col items-end gap-2">
-      <div className="flex flex-wrap justify-end gap-2">
-        <button onClick={refreshFinancialData} disabled={isRefreshing} className="rounded-lg border border-gray-300 px-4 py-3 text-sm font-medium text-black hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
-          {isRefreshing ? "Refreshing..." : "Refresh Financial Data"}
-        </button>
-        {investmentPlaidItemId && !investmentUpdateLinkToken && (
-          <button onClick={createInvestmentUpdateLinkToken} disabled={isPreparingInvestmentConsent || isRefreshing} className="rounded-lg border border-emerald-600 px-4 py-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">
-            {isPreparingInvestmentConsent ? "Preparing..." : "Enable Investment Holdings"}
+    <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-ink)]">Connected accounts</p>
+      <p className="mt-1 text-xs text-[var(--text-muted)]">Plaid connections stay separate from manually entered accounts.</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {!linkToken ? (
+          <button id="plaid-connect-button" onClick={createLinkToken} disabled={isLoading} className="rounded border border-[var(--border)] px-3 py-2 text-sm font-medium disabled:opacity-50">
+            {isLoading ? "Preparing..." : "Connect a bank"}
+          </button>
+        ) : (
+          <button id="plaid-connect-button" onClick={openLink} disabled={!ready || isLoading || isLinkOpen} className="rounded bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
+            {isLoading ? "Processing..." : isLinkOpen ? "Plaid is open" : "Open Plaid"}
           </button>
         )}
-        <button onClick={createBiltRepairLinkToken} disabled={isPreparingBiltRepair || isRefreshing || Boolean(biltRepairLinkToken)} className="rounded-lg border border-emerald-600 px-4 py-3 text-sm font-medium text-emerald-700 hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-50">
-          {isPreparingBiltRepair ? "Preparing..." : "Repair Bilt Connection"}
-        </button>
-        {!linkToken ? (
-          <button onClick={createLinkToken} className="rounded-lg bg-black px-5 py-3 text-white">Connect a Bank Account</button>
-        ) : (
-          <button onClick={() => open()} disabled={!ready} className="rounded-lg bg-black px-5 py-3 text-white disabled:opacity-50">Open Plaid</button>
-        )}
       </div>
-      {linkStatus && <p className="text-right text-sm text-gray-600">{linkStatus}</p>}
-      {refreshStatus && <p className="text-right text-sm text-emerald-700">{refreshStatus}</p>}
-      {refreshError && <p className="max-w-md text-right text-sm text-red-600">Refresh error: {refreshError}</p>}
-      {investmentConsentStatus && <p className="text-right text-sm text-emerald-700">{investmentConsentStatus}</p>}
-      {investmentConsentError && <p className="max-w-md text-right text-sm text-red-600">Investment consent error: {investmentConsentError}</p>}
-      {biltRepairStatus && <p className="text-right text-sm text-emerald-700">{biltRepairStatus}</p>}
-      {biltRepairError && <p className="max-w-md text-right text-sm text-red-600">Bilt repair error: {biltRepairError}</p>}
+      {status && <p className="mt-2 text-xs text-[var(--text-muted)]" role="status">{status}</p>}
+      {error && <p className="mt-2 text-xs text-red-600" role="alert">{error}</p>}
     </div>
   );
 }
