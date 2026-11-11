@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getAuthenticatedSupabaseContext } from "./supabase/server";
+import { CredentialConfigurationError } from "./plaidCredentialConfiguration";
 
 const plaidUserContextBrand = Symbol("PlaidUserContext");
 const authenticatedPlaidContexts = new WeakSet<object>();
@@ -44,7 +45,7 @@ export async function getAuthenticatedPlaidContext(
   onStage?.("authenticated Plaid context creation");
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceRoleKey) throw new Error("Supabase service credentials are required for Plaid operations");
+  if (!url || !serviceRoleKey) throw new CredentialConfigurationError("SERVICE_CONFIGURATION_INVALID");
 
   const context = Object.freeze({
     userId: auth.user.id,

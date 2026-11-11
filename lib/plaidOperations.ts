@@ -1,7 +1,8 @@
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
+import type { CredentialStage } from "./plaidCredentialConfiguration";
 
 export class PlaidOperationError extends Error {
-  constructor(message: string, public status = 400) { super(message); }
+  constructor(message: string, public status = 400, public stage?: CredentialStage) { super(message); }
 }
 
 export function safePlaidError(error: unknown): string {
@@ -23,5 +24,12 @@ export async function withPlaidOperation<T>(context: PlaidUserContext, work: () 
   if (error) throw new PlaidOperationError("Unable to secure Plaid operation", 503);
   if (!data) throw new PlaidOperationError("Another Plaid operation is running. Please retry shortly.", 409);
   try { return await work(); }
-  finally { await context.supabase.from("user_plaid_operations").delete().eq("user_id", context.userId).eq("token", token); }
+  finally {
+    try {
+      const { error: releaseError } = await context.supabase.from("user_plaid_operations").delete().eq("user_id", context.userId).eq("token", token);
+      if (releaseError) throw new Error();
+    } catch {
+      throw new PlaidOperationError("The operation finished but its lock could not be released. Refresh status and ask the administrator to check the operation lock before retrying.", 503, "lock_release");
+    }
+  }
 }

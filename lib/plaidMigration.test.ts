@@ -61,6 +61,18 @@ describe("personal Plaid migration on isolated Postgres", () => {
       expect((await db.query("select portfolio_value from public.investment_snapshots")).rows).toEqual([{ portfolio_value: null }]);
       const rls = await db.query<{ relrowsecurity: boolean }>("select relrowsecurity from pg_class where oid='public.user_plaid_credentials'::regclass");
       expect(rls.rows[0].relrowsecurity).toBe(true);
+
+      // A newly registered Auth user has no profile until the app initializes it.
+      const newUser = "00000000-0000-4000-8000-000000000005";
+      await db.query("insert into auth.users(id) values ($1)", [newUser]);
+      expect((await db.query("select id from public.profiles where id=$1", [newUser])).rows).toEqual([]);
+      await db.query("select set_config('request.jwt.claim.sub',$1,false)", [newUser]);
+      await db.exec("set role authenticated");
+      // Equivalent to ensureOwnProfile's owner-only, ignore-duplicate upsert.
+      await db.query("insert into public.profiles(id) values ($1) on conflict(id) do nothing", [newUser]);
+      await db.query("insert into public.profiles(id) values ($1) on conflict(id) do nothing", [newUser]);
+      expect((await db.query("select id from public.profiles")).rows).toEqual([{ id: newUser }]);
+      await db.exec("reset role");
     } finally { await db.close(); }
   }, 30000);
 });

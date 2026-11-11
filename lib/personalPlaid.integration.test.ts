@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), createSupabase: vi.fn(), clients: new Map<string, Record<string, ReturnType<typeof vi.fn>>>(), configurations: [] as Record<string, unknown>[] }));
 vi.mock("./supabase/server", () => ({ getAuthenticatedSupabaseContext: mocks.auth }));
@@ -25,6 +25,7 @@ type Row = Record<string, unknown>;
 let tables: Record<string, Row[]>;
 let locked: Set<string>;
 let failInsert = false;
+let failRelease = false;
 function database() {
   return {
     rpc: async (_name: string, args: { owner_id: string }) => {
@@ -44,6 +45,7 @@ function database() {
         }
         if (operation === "update") selected.forEach(row => Object.assign(row, values));
         if (operation === "delete") {
+          if (table === "user_plaid_operations" && failRelease) return { data: null, error: { message: "synthetic-private-database-error" } };
           if (table === "user_plaid_operations") locked.delete(String(filters.user_id));
           tables[table] = rows.filter(row => !selected.includes(row));
         }
@@ -82,7 +84,8 @@ function provider() {
 }
 beforeEach(() => {
   vi.clearAllMocks();
-  tables = {}; locked = new Set(); failInsert = false;
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  tables = {}; locked = new Set(); failInsert = false; failRelease = false;
   mocks.clients.clear(); mocks.configurations = [];
   mocks.clients.set(clientA, provider()); mocks.clients.set(clientB, provider());
   mocks.createSupabase.mockReturnValue(database());
@@ -92,8 +95,85 @@ beforeEach(() => {
   process.env.PLAID_CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
   delete process.env.NEXT_PUBLIC_SITE_URL;
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe("personal credential HTTP and storage integration (mock providers)", () => {
+  it("identifies the exact invalid-origin failure before authentication, locking or Plaid verification", async () => {
+    process.env.NEXT_PUBLIC_SITE_URL = "invalid-origin";
+    const response = await POST(request("POST", input(), "http://localhost"));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "ORIGIN_CONFIGURATION_INVALID" });
+    expect(mocks.auth).not.toHaveBeenCalled();
+    expect(locked.size).toBe(0); expect(mocks.configurations).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "origin_validation", category: "ORIGIN_CONFIGURATION_INVALID", status: 503 });
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain("invalid-origin");
+  });
+
+  it("returns a new user with no records to status, encrypted Save, Verify and Delete without requiring a prior profile", async () => {
+    asUser("new-user");
+    expect(await (await GET(request())).json()).toEqual({ configured: false });
+    expect(tables.profiles).toBeUndefined();
+    expect((await POST(request("POST", input(), "http://localhost"))).status).toBe(200);
+    expect(tables.user_plaid_credentials[0].user_id).toBe("new-user");
+    expect(JSON.stringify(tables)).not.toContain(input().secret);
+    expect(locked.size).toBe(0);
+    expect((await POST(request("POST", { action: "verify" }))).status).toBe(200);
+    expect((await DELETE(request("DELETE"))).status).toBe(200);
+    expect(tables.user_plaid_credentials).toHaveLength(0); expect(locked.size).toBe(0);
+  });
+
+  it("checks encryption configuration before contacting Plaid and releases the operation lock", async () => {
+    delete process.env.PLAID_CREDENTIAL_ENCRYPTION_KEY;
+    const response = await POST(request("POST", input()));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "ENCRYPTION_CONFIGURATION_INVALID" });
+    expect(mocks.configurations).toHaveLength(0); expect(locked.size).toBe(0);
+    expect(tables.user_plaid_credentials).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "encryption", category: "ENCRYPTION_CONFIGURATION_INVALID", status: 503 });
+  });
+
+  it("reports missing server credentials before privileged storage or provider access", async () => {
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const response = await POST(request("POST", input()));
+    expect(response.status).toBe(503);
+    expect(await response.json()).toMatchObject({ code: "SERVICE_CONFIGURATION_INVALID" });
+    expect(mocks.createSupabase).not.toHaveBeenCalled();
+    expect(locked.size).toBe(0); expect(mocks.configurations).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "service_client", category: "SERVICE_CONFIGURATION_INVALID", status: 503 });
+  });
+
+  it.each([
+    [{ response: { status: 400, data: { error_code: "INVALID_API_KEYS", error_message: "synthetic-private-provider" } } }, 422, "provider_rejected"],
+    [{ code: "ECONNABORTED", message: "synthetic-private-network" }, 503, "provider_unavailable"],
+    [{ response: { status: 503, data: { error_message: "synthetic-private-provider" } } }, 503, "provider_unavailable"],
+  ])("does not persist rejected or unavailable Plaid verification and always releases its lock", async (error, status, category) => {
+    mocks.clients.get(clientA)!.institutionsGet.mockRejectedValueOnce(error);
+    const response = await POST(request("POST", input()));
+    expect(response.status).toBe(status);
+    expect(await response.text()).not.toContain("synthetic-private");
+    expect(tables.user_plaid_credentials).toHaveLength(0); expect(locked.size).toBe(0);
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "plaid_verification", category, status });
+  });
+
+  it("releases the lock when credential persistence fails", async () => {
+    failInsert = true;
+    const response = await POST(request("POST", input()));
+    expect(response.status).toBe(503); expect(locked.size).toBe(0);
+    expect(tables.user_plaid_credentials).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "persistence", category: "storage_unavailable", status: 503 });
+  });
+
+  it("does not silently report success when lock cleanup fails after persistence", async () => {
+    failRelease = true;
+    const response = await POST(request("POST", input()));
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("synthetic-private");
+    expect(tables.user_plaid_credentials).toHaveLength(1);
+    expect(locked.has("user-a")).toBe(true);
+    expect(await (await GET(request())).json()).toMatchObject({ configured: true });
+    expect(console.warn).toHaveBeenCalledWith("Personal Plaid credential operation failed", { stage: "lock_release", category: "lock_release_failed", status: 503 });
+  });
+
   it("isolates two users' credentials, clients, and environments", async () => {
     expect((await POST(request("POST", input()))).status).toBe(200);
     const a = tables.user_plaid_credentials[0];

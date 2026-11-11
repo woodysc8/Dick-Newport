@@ -1,4 +1,5 @@
 // Browser-safe contract: this module never imports server credentials or the Plaid SDK.
+import { credentialConfigurationMessages } from "./plaidCredentialConfiguration";
 export type CredentialStatus = {
   configured: boolean;
   environment?: "sandbox" | "production";
@@ -36,7 +37,13 @@ export async function readCredentialResponse(response: Response): Promise<Creden
   try { data = JSON.parse(text); }
   catch { throw new CredentialResponseError(`The server returned invalid JSON (HTTP ${response.status}). Refresh status before retrying.`); }
   // Never reflect arbitrary upstream error bodies, HTML, or native exception text.
-  if (!response.ok) throw new CredentialResponseError(httpError(response.status));
+  if (!response.ok) {
+    const code = data && typeof data === "object" && "code" in data ? data.code : null;
+    if (typeof code === "string" && Object.hasOwn(credentialConfigurationMessages, code)) {
+      throw new CredentialResponseError(credentialConfigurationMessages[code as keyof typeof credentialConfigurationMessages]);
+    }
+    throw new CredentialResponseError(httpError(response.status));
+  }
   if (typeof data !== "object" || data === null || Array.isArray(data) || !("configured" in data) || typeof data.configured !== "boolean") {
     throw new CredentialResponseError("The server returned an invalid credential status. Refresh status before retrying.");
   }

@@ -21,6 +21,12 @@ describe("credential response contract", () => {
     const response = new Response('{"configured":false}', { headers: { "Content-Type": "application/problem+json; charset=utf-8" } });
     expect(await readCredentialResponse(response)).toEqual({ configured: false });
   });
+  it("shows fixed configuration guidance without reflecting the upstream error message", async () => {
+    const response = Response.json({ code: "ORIGIN_CONFIGURATION_INVALID", error: "synthetic-private-upstream" }, { status: 503 });
+    const result = readCredentialResponse(response);
+    await expect(result).rejects.toThrow("NEXT_PUBLIC_SITE_URL");
+    await expect(result).rejects.not.toThrow("synthetic-private-upstream");
+  });
   it.each([400, 401, 403, 405, 409, 422, 500, 503])("does not reflect error bodies for HTTP %i", async status => {
     const result = readCredentialResponse(Response.json({ error: "synthetic-private-response" }, { status }));
     await expect(result).rejects.toBeInstanceOf(CredentialResponseError);

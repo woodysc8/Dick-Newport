@@ -3,6 +3,7 @@ import { createPlaidClient, decryptCredentials, getUserPlaidClient, type Persona
 import { decryptPlaidSecret, encryptPlaidSecret } from "./plaidEncryption";
 import { PlaidOperationError, safePlaidError } from "./plaidOperations";
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
+import type { CredentialStageReporter } from "./plaidCredentialConfiguration";
 
 export function validateCredentials(body: Record<string, unknown>): PersonalPlaidCredentials {
   if (Object.keys(body).some(key => !["clientId", "secret", "environment"].includes(key)) ||
@@ -14,7 +15,8 @@ export function validateCredentials(body: Record<string, unknown>): PersonalPlai
   return { clientId: body.clientId, secret: body.secret, environment: body.environment };
 }
 
-export async function credentialStatus(context: PlaidUserContext) {
+export async function credentialStatus(context: PlaidUserContext, onStage?: CredentialStageReporter) {
+  onStage?.("credential_status");
   if (!isAuthenticatedPlaidContext(context)) throw new PlaidOperationError("Authentication required", 401);
   const { data, error } = await context.supabase.from("user_plaid_credentials")
     .select("id, environment, status, verified_at").eq("user_id", context.userId).maybeSingle();
@@ -22,12 +24,21 @@ export async function credentialStatus(context: PlaidUserContext) {
   return data ? { configured: true, environment: data.environment, status: data.status, verifiedAt: data.verified_at } : { configured: false };
 }
 
-export async function verifyCredentials(context: PlaidUserContext, input?: PersonalPlaidCredentials) {
+export async function verifyCredentials(context: PlaidUserContext, input?: PersonalPlaidCredentials, onStage?: CredentialStageReporter) {
   if (!isAuthenticatedPlaidContext(context)) throw new PlaidOperationError("Authentication required", 401);
+  if (!input) onStage?.("credential_status");
   const client = input ? createPlaidClient(input) : (await getUserPlaidClient(context)).client;
+  onStage?.("plaid_verification");
   try { await client.institutionsGet({ country_codes: [CountryCode.Us], count: 1, offset: 0 }); }
-  catch (error) { throw new PlaidOperationError(safePlaidError(error), 422); }
+  catch (error) {
+    const candidate = error as { code?: string; response?: { status?: number } };
+    if (!candidate?.response || (candidate.response.status ?? 0) >= 500 || ["ECONNABORTED", "ETIMEDOUT", "ENOTFOUND", "ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ERR_NETWORK"].includes(candidate.code ?? "")) {
+      throw new PlaidOperationError("Plaid verification is temporarily unavailable. Check connectivity and retry.", 503);
+    }
+    throw new PlaidOperationError(safePlaidError(error), 422);
+  }
   if (!input) {
+    onStage?.("persistence");
     const { error } = await context.supabase.from("user_plaid_credentials")
       .update({ verified_at: new Date().toISOString() }).eq("user_id", context.userId).eq("status", "active");
     if (error) throw new PlaidOperationError("Unable to record verification", 503);
@@ -36,7 +47,8 @@ export async function verifyCredentials(context: PlaidUserContext, input?: Perso
 
 // Caller holds the user's operation lock throughout remote revocation and persistence.
 // A failed remote removal retains ciphertext and tokens in a disabled, retryable state.
-export async function deleteCredentials(context: PlaidUserContext) {
+export async function deleteCredentials(context: PlaidUserContext, onStage?: CredentialStageReporter) {
+  onStage?.("revocation");
   if (!isAuthenticatedPlaidContext(context)) throw new PlaidOperationError("Authentication required", 401);
   const { data: saved, error } = await context.supabase.from("user_plaid_credentials")
     .select("id, environment, encrypted_credentials").eq("user_id", context.userId).maybeSingle();
@@ -72,15 +84,17 @@ export async function deleteCredentials(context: PlaidUserContext) {
   if (deleteError) throw new PlaidOperationError("Unable to delete credentials. Retry deletion.", 503);
 }
 
-export async function saveCredentials(context: PlaidUserContext, input: PersonalPlaidCredentials, replace: boolean) {
+export async function saveCredentials(context: PlaidUserContext, input: PersonalPlaidCredentials, replace: boolean, onStage?: CredentialStageReporter) {
   if (!isAuthenticatedPlaidContext(context)) throw new PlaidOperationError("Authentication required", 401);
-  const status = await credentialStatus(context);
+  const status = await credentialStatus(context, onStage);
   if (status.configured && !replace) throw new PlaidOperationError("Use Replace credentials to revoke existing connections first.", 409);
   if (status.status === "revoking") throw new PlaidOperationError("Finish deleting the previous credentials before saving new ones.", 409);
-  await verifyCredentials(context, input);
+  onStage?.("encryption");
   const id = crypto.randomUUID();
   const encrypted = encryptPlaidSecret(JSON.stringify({ clientId: input.clientId, secret: input.secret }), `${context.userId}:${id}:${input.environment}`);
-  if (status.configured) await deleteCredentials(context);
+  await verifyCredentials(context, input, onStage);
+  if (status.configured) await deleteCredentials(context, onStage);
+  onStage?.("persistence");
   const { error } = await context.supabase.from("user_plaid_credentials").insert({
     id, user_id: context.userId, environment: input.environment, encrypted_credentials: encrypted,
     verified_at: new Date().toISOString(), status: "active",

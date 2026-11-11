@@ -2,16 +2,33 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createSupabaseServerClient: vi.fn(),
+  ensureOwnProfile: vi.fn(),
   redirect: vi.fn((path: string) => { throw new Error(`redirect:${path}`); }),
 }));
 
 vi.mock("../../lib/supabase/server", () => ({
   createSupabaseServerClient: mocks.createSupabaseServerClient,
-  ensureOwnProfile: vi.fn(),
+  ensureOwnProfile: mocks.ensureOwnProfile,
 }));
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 
-import { signOut } from "./actions";
+import { signOut, signUp } from "./actions";
+
+describe("fresh account profile initialization", () => {
+  it("initializes only the new authenticated profile after a successful signup", async () => {
+    vi.clearAllMocks();
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "http://localhost:3000");
+    const register = vi.fn().mockResolvedValue({ data: { user: { id: "new-auth-user" }, session: {} }, error: null });
+    const client = { auth: { signUp: register } };
+    mocks.createSupabaseServerClient.mockResolvedValue(client);
+    const form = new FormData(); form.set("email", "synthetic@example.test"); form.set("password", "synthetic-password");
+    try {
+      await expect(signUp(form)).rejects.toThrow("redirect:/onboarding");
+      expect(mocks.ensureOwnProfile).toHaveBeenCalledWith(client, "new-auth-user");
+      expect(register).toHaveBeenCalledWith(expect.objectContaining({ options: { emailRedirectTo: "http://localhost:3000/auth/callback" } }));
+    } finally { vi.unstubAllEnvs(); }
+  });
+});
 
 describe("signOut", () => {
   beforeEach(() => {

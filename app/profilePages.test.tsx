@@ -89,11 +89,14 @@ describe("profile page loading", () => {
   });
 
   it("renders the starter settings form when no profile exists", async () => {
-    mocks.createSupabaseServerClient.mockResolvedValue(profileClient({ data: null, error: null }));
+    const client = profileClient({ data: null, error: null });
+    mocks.createSupabaseServerClient.mockResolvedValue(client);
 
     const page = await ProfileSettingsPage({ searchParams: Promise.resolve({}) });
 
     expect(renderedText(page)).toContain("financial-profile-form");
+    expect(renderedText(page)).toContain("personal-plaid-credentials");
+    expect(mocks.ensureOwnProfile).toHaveBeenCalledWith(client, "user-a");
   });
 
   it("does not render a settings form when the profile read fails", async () => {

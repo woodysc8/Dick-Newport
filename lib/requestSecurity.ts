@@ -1,10 +1,17 @@
+import { CredentialConfigurationError } from "./plaidCredentialConfiguration";
+
 export function isSameOriginRequest(request: Request): boolean {
   if (request.headers.get("sec-fetch-site") === "cross-site") return false;
   const origin = request.headers.get("origin");
   if (!origin) return true;
 
   const configuredOrigin = process.env.NEXT_PUBLIC_SITE_URL;
-  const expectedOrigin = configuredOrigin ? new URL(configuredOrigin).origin : new URL(request.url).origin;
+  let expectedOrigin: string;
+  try {
+    const url = new URL(configuredOrigin || request.url);
+    if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
+    expectedOrigin = url.origin;
+  } catch { throw new CredentialConfigurationError("ORIGIN_CONFIGURATION_INVALID"); }
   return origin === expectedOrigin;
 }
 

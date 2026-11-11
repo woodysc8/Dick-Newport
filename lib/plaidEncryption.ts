@@ -1,11 +1,12 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { CredentialConfigurationError } from "./plaidCredentialConfiguration";
 
 function encryptionKey() {
   if (typeof window !== "undefined") throw new Error("Server credentials unavailable");
   const value = process.env.PLAID_CREDENTIAL_ENCRYPTION_KEY;
-  if (!value || !/^[A-Za-z0-9+/]{43}=$/.test(value)) throw new Error("Credential encryption is not configured");
+  if (!value || !/^[A-Za-z0-9+/]{43}=$/.test(value)) throw new CredentialConfigurationError("ENCRYPTION_CONFIGURATION_INVALID");
   const key = Buffer.from(value, "base64");
-  if (key.length !== 32) throw new Error("Credential encryption is not configured");
+  if (key.length !== 32) throw new CredentialConfigurationError("ENCRYPTION_CONFIGURATION_INVALID");
   return key;
 }
 

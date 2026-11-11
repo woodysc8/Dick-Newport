@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), status: vi.fn(), save: vi.fn(), verify: vi.fn(), remove: vi.fn(), lock: vi.fn() }));
 vi.mock("../../../../lib/plaidTenant", () => ({ getAuthenticatedPlaidContext: mocks.auth }));
@@ -24,10 +24,12 @@ async function expectJson(response: Response, status: number) {
 }
 beforeEach(() => {
   vi.resetAllMocks(); delete process.env.NEXT_PUBLIC_SITE_URL;
+  vi.spyOn(console, "warn").mockImplementation(() => {});
   mocks.auth.mockResolvedValue({ userId: "synthetic-user" });
   mocks.status.mockResolvedValue({ configured: false });
   mocks.lock.mockImplementation((_context: unknown, work: () => Promise<unknown>) => work());
 });
+afterEach(() => vi.restoreAllMocks());
 describe("credential API JSON responses", () => {
   it("returns JSON for status, Save, Verify, Replace, Delete and unsupported methods", async () => {
     for (const [handler, method, body] of [[GET, "GET"], [POST, "POST", "{}"], [POST, "POST", '{"action":"verify"}'], [PUT, "PUT", "{}"], [DELETE, "DELETE"]] as const) {
@@ -60,7 +62,8 @@ describe("credential API JSON responses", () => {
     await expectJson(await POST(request("POST", "{}")), 409);
     await expectJson(await POST(request("POST", "{}", "https://attacker.example")), 403);
     process.env.NEXT_PUBLIC_SITE_URL = "invalid-url";
-    await expectJson(await POST(request("POST", "{}", "http://localhost")), 500);
+    const result = await expectJson(await POST(request("POST", "{}", "http://localhost")), 503);
+    expect(result.code).toBe("ORIGIN_CONFIGURATION_INVALID");
     delete process.env.NEXT_PUBLIC_SITE_URL;
   });
   it("keeps safe Plaid verification failures as JSON", async () => {

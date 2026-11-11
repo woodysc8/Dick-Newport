@@ -1,5 +1,7 @@
 # Personal Plaid Settings response fix
 
+The subsequent Save HTTP 500 was reproduced and traced to an invalid local site URL. See [HTTP 500 diagnosis and repair](personal-plaid-http-500-fix.md) for the confirmed stage, configuration correction, safe diagnostics, and read-only database verification. This report describes the preceding response-parsing fix.
+
 ## Verified cause and scope
 
 The original Settings component called `response.json()` unconditionally during initial status loading, credential mutations, and recovery status loading. An empty response throws a native `SyntaxError` before the code checks `response.ok`. The mutation catch displayed that exception message directly. This reproduced `Unexpected end of JSON input` in the rendered Settings regression test before the fix.

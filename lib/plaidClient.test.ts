@@ -24,7 +24,7 @@ describe("personal Plaid encryption and configuration", () => {
       expect(() => decryptPlaidSecret(invalid, "a")).toThrow("Unable to decrypt saved Plaid credentials");
     }
     vi.stubEnv("PLAID_CREDENTIAL_ENCRYPTION_KEY", "invalid");
-    expect(() => encryptPlaidSecret("synthetic-secret", "a")).toThrow("not configured");
+    expect(() => encryptPlaidSecret("synthetic-secret", "a")).toThrow("Credential encryption is unavailable");
   });
   it("isolates Sandbox and Production without consulting shared environment credentials", () => {
     vi.stubEnv("PLAID_CLIENT_ID", "global-must-not-be-used");
