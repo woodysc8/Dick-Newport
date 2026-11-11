@@ -109,4 +109,9 @@ describe("Plaid dashboard request flow", () => {
     expect(fetchMock.mock.calls.flat().join(" ")).not.toContain("investment-update");
     expect(fetchMock.mock.calls.flat().join(" ")).not.toContain("bilt-repair");
   });
+
+  it.each(["", "<html>gateway failure</html>", "null"])("handles unreadable refresh responses safely: %s", async body => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(body, { status: 502 }));
+    await expect(requestPlaidRefresh()).rejects.toThrow(/response/);
+  });
 });

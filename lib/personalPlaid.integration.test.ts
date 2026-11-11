@@ -279,6 +279,31 @@ describe("personal credential HTTP and storage integration (mock providers)", ()
     expect(tables.user_plaid_credentials).toHaveLength(0);
   });
 
+  it("makes repeated finalization idempotent without replacing or revoking saved Items", async () => {
+    await POST(request("POST", input()));
+    const session = await (await link(request("POST"))).json();
+    const body = { public_token: "synthetic-public", credential_session: session.credential_session };
+    expect((await exchange(request("POST", body))).status).toBe(200);
+    const original = { ...tables.plaid_items[0] };
+    expect((await exchange(request("POST", body))).status).toBe(200);
+    expect(tables.plaid_items).toEqual([original]);
+    expect(mocks.clients.get(clientA)!.itemRemove).not.toHaveBeenCalled();
+    expect(locked.size).toBe(0);
+  });
+
+  it("does not revoke or expose another owner's saved Item on an exchange collision", async () => {
+    await POST(request("POST", input()));
+    const session = await (await link(request("POST"))).json();
+    tables.plaid_items = [{ id: "existing", user_id: "user-b", plaid_item_id: "synthetic-item", credential_id: "private-credential" }];
+    const original = { ...tables.plaid_items[0] };
+    const result = await exchange(request("POST", { public_token: "synthetic-public", credential_session: session.credential_session }));
+    expect(result.status).toBe(409);
+    expect(await result.text()).not.toContain("private-credential");
+    expect(tables.plaid_items).toEqual([original]);
+    expect(mocks.clients.get(clientA)!.itemRemove).not.toHaveBeenCalled();
+    expect(locked.size).toBe(0);
+  });
+
   it("revokes newly exchanged Items if persistence fails", async () => {
     await POST(request("POST", input()));
     const session = await (await link(request("POST"))).json();

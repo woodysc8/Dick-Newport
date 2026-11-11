@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { usePlaidLink } from "react-plaid-link";
+import Script from "next/script";
 
 type LinkTokenResponse = {
   link_token?: string;
@@ -53,6 +54,7 @@ export type RefreshResponse = {
     holdings_removed: number;
     error_count: number;
     warning_count: number;
+    failed_stages?: string[];
   }>;
 };
 
@@ -77,8 +79,12 @@ export async function exchangePlaidPublicToken(publicToken: string, credentialSe
 
 export async function requestPlaidRefresh(): Promise<RefreshResponse> {
   const response = await fetch("/api/plaid/refresh", { method: "POST" });
-  const data = (await response.json()) as RefreshResponse & { error?: string };
+  let data: RefreshResponse & { error?: string };
+  try { data = await response.json(); }
+  catch { throw new Error("Refresh returned an unreadable response. Your saved connections are unchanged. Retry refresh."); }
+  if (!data || typeof data !== "object") throw new Error("Refresh returned an invalid response. Retry refresh.");
   if (!response.ok) throw new Error(data.error ?? "Unable to refresh Plaid connections");
+  if (!["completed", "in_progress"].includes(data.status) || !Array.isArray(data.items)) throw new Error("Refresh returned an invalid response. Retry refresh.");
   return data;
 }
 
@@ -106,9 +112,11 @@ function refreshSummary(data: RefreshResponse): { message: string; error: boolea
     0,
   );
   if (!data.success || failedItems > 0) {
+    const stages = [...new Set(data.items.flatMap(item => item.failed_stages ?? []))]
+      .filter(stage => ["ownership", "token_decryption", "accounts", "transactions", "investments"].includes(stage));
     return {
       message: failedItems > 0
-        ? `Refresh completed with ${failedItems} connection${failedItems === 1 ? "" : "s"} needing attention.`
+        ? `Refresh completed with ${failedItems} connection${failedItems === 1 ? "" : "s"} needing attention${stages.length ? ` (${stages.join(", ")})` : ""}. Retry refresh; check personal credential and product access in Settings if it persists.`
         : "Refresh completed with errors.",
       error: true,
     };
@@ -127,17 +135,21 @@ export default function PlaidConnect() {
   const [isLinkOpen, setIsLinkOpen] = useState(false);
   const tokenRequestInFlight = useRef(false);
   const linkOpenInProgress = useRef(false);
+  const mutationInFlight = useRef(false);
+  const exchanged = useRef(false);
+  const [scriptReady, setScriptReady] = useState(false);
+  const savedConnection = useRef(false);
 
   const refreshAfterExchange = useCallback(async () => {
     const data = await requestPlaidRefresh();
     const summary = refreshSummary(data);
-    setStatus(summary.message);
+    setStatus(`${savedConnection.current ? "Connection saved. " : ""}${summary.message}`);
     setError(summary.error ? summary.message : null);
-    if (!summary.error && data.status === "completed") router.refresh();
+    if (data.status === "completed") router.refresh();
   }, [router]);
 
   const createLinkToken = async () => {
-    if (tokenRequestInFlight.current || isLoading) return;
+    if (tokenRequestInFlight.current || mutationInFlight.current || linkOpenInProgress.current || isLoading) return;
     tokenRequestInFlight.current = true;
     setIsLoading(true);
     setError(null);
@@ -145,6 +157,7 @@ export default function PlaidConnect() {
     try {
       const token = await requestPlaidLinkToken(product);
       session.current = token.credentialSession;
+      exchanged.current = false;
       setLinkToken(token);
       setStatus("Ready to connect.");
     } catch (error) {
@@ -157,6 +170,8 @@ export default function PlaidConnect() {
   };
 
   const onSuccess = useCallback(async (publicToken: string | null) => {
+    if (exchanged.current || mutationInFlight.current) return;
+    exchanged.current = true;
     linkOpenInProgress.current = false;
     setIsLinkOpen(false);
     setLinkToken(null);
@@ -166,21 +181,29 @@ export default function PlaidConnect() {
       return;
     }
     setIsLoading(true);
+    mutationInFlight.current = true;
     setError(null);
     setStatus("Saving your secure connection...");
     try {
       await exchangePlaidPublicToken(publicToken, session.current);
+      savedConnection.current = true;
       setStatus("Connection saved. Refreshing financial data...");
-      await refreshAfterExchange();
+      try { await refreshAfterExchange(); }
+      catch (error) {
+        setStatus("Connection saved. Financial data could not be refreshed.");
+        setError(error instanceof Error ? error.message : "Retry refresh using the saved connection.");
+      }
     } catch {
       setStatus("Plaid returned successfully, but the connection could not be completed.");
-      setError("Please start a new attempt. If the problem continues, contact support.");
+      setError("Refresh saved connections before starting another attempt. The save result could not be confirmed.");
     } finally {
       setIsLoading(false);
+      mutationInFlight.current = false;
     }
   }, [refreshAfterExchange]);
 
   const onExit = useCallback((linkError: { error_code: string } | null) => {
+    if (exchanged.current) return;
     linkOpenInProgress.current = false;
     setIsLinkOpen(false);
     setLinkToken(null);
@@ -199,10 +222,8 @@ export default function PlaidConnect() {
     console.info("Plaid Link event", code ? { eventName, errorCode: code } : { eventName });
   }, []);
 
-  const { open, ready } = usePlaidLink({ token: linkToken?.token ?? null, onSuccess, onExit, onEvent });
-
-  const openLink = () => {
-    if (!linkToken || !ready || isLoading || linkOpenInProgress.current) return;
+  const openLink = (open: () => void, ready: boolean) => {
+    if (!linkToken || !ready || isLoading || linkOpenInProgress.current || mutationInFlight.current) return;
     if (isPlaidLinkTokenExpired(linkToken.expiration)) {
       setLinkToken(null);
       setStatus("This Plaid session expired. Start another attempt to get a fresh session.");
@@ -224,6 +245,19 @@ export default function PlaidConnect() {
     }
   };
 
+  const retryRefresh = async () => {
+    if (mutationInFlight.current || tokenRequestInFlight.current || linkOpenInProgress.current || linkToken) return;
+    mutationInFlight.current = true;
+    setIsLoading(true);
+    setError(null);
+    setStatus("Refreshing saved connections...");
+    try { await refreshAfterExchange(); }
+    catch (error) {
+      setStatus("Saved connections are unchanged. Refresh failed.");
+      setError(error instanceof Error ? error.message : "Unable to refresh. Retry shortly.");
+    } finally { mutationInFlight.current = false; setIsLoading(false); }
+  };
+
   return (
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-ink)]">Connected accounts</p>
@@ -231,18 +265,30 @@ export default function PlaidConnect() {
       <a className="mt-2 block text-xs underline" href="/settings/profile">Manage personal Plaid credentials</a>
       <label className="mt-2 block text-xs">Connection product <select value={product} disabled={isLoading || !!linkToken} onChange={event => setProduct(event.target.value)}><option value="transactions">Transactions and balances</option><option value="investments">Investments and balances</option></select></label>
       <div className="mt-3 flex flex-wrap gap-2">
+        {linkToken && <Script id="personal-plaid-link-sdk" src="https://cdn.plaid.com/link/v2/stable/link-initialize.js" strategy="afterInteractive" onReady={() => setScriptReady(true)} onError={() => { setLinkToken(null); setError("Plaid Link could not load. Retry connecting."); }} />}
         {!linkToken ? (
           <button id="plaid-connect-button" onClick={createLinkToken} disabled={isLoading} className="rounded border border-[var(--border)] px-3 py-2 text-sm font-medium disabled:opacity-50">
             {isLoading ? "Preparing..." : "Connect a bank"}
           </button>
-        ) : (
-          <button id="plaid-connect-button" onClick={openLink} disabled={!ready || isLoading || isLinkOpen} className="rounded bg-black px-3 py-2 text-sm font-medium text-white disabled:opacity-50">
-            {isLoading ? "Processing..." : isLinkOpen ? "Plaid is open" : "Open Plaid"}
-          </button>
-        )}
+        ) : scriptReady ? <PlaidSession token={linkToken.token} onSuccess={onSuccess} onExit={onExit} onEvent={onEvent} onOpen={openLink} disabled={isLoading || isLinkOpen} /> : <button disabled>Loading Plaid...</button>}
+        <button type="button" onClick={retryRefresh} disabled={isLoading || isLinkOpen || !!linkToken} className="rounded border border-[var(--border)] px-3 py-2 text-sm disabled:opacity-50">Refresh saved connections</button>
       </div>
       {status && <p className="mt-2 text-xs text-[var(--text-muted)]" role="status">{status}</p>}
       {error && <p className="mt-2 text-xs text-red-600" role="alert">{error}</p>}
     </div>
   );
+}
+
+// Mount the SDK hook only after Next Script's cached loader has finished.
+// This avoids react-plaid-link removing/reinserting an in-flight script in Strict Mode.
+function PlaidSession({ token, onSuccess, onExit, onEvent, onOpen, disabled }: {
+  token: string;
+  onSuccess: (token: string | null) => void;
+  onExit: (error: { error_code: string } | null) => void;
+  onEvent: (name: string, metadata: { error_code: string | null }) => void;
+  onOpen: (open: () => void, ready: boolean) => void;
+  disabled: boolean;
+}) {
+  const { open, ready } = usePlaidLink({ token, onSuccess, onExit, onEvent });
+  return <button id="plaid-connect-button" onClick={() => onOpen(open, ready)} disabled={!ready || disabled} className="rounded bg-black px-3 py-2 text-sm text-white disabled:opacity-50">Open Plaid</button>;
 }

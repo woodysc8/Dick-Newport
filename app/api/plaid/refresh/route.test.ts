@@ -18,8 +18,11 @@ vi.mock("../../../../lib/plaidRefresh", () => ({
   refreshFinancialData: mocks.refreshFinancialData,
 }));
 
-vi.mock("../../../../lib/plaidOperations", () => ({ withPlaidOperation: (_context: unknown, work: () => Promise<unknown>) => work() }));
+vi.mock("../../../../lib/plaidOperations", async importOriginal => ({ ...await importOriginal<typeof import("../../../../lib/plaidOperations")>(), withPlaidOperation: (_context: unknown, work: () => Promise<unknown>) => work() }));
 import { POST } from "./route";
+import { NextRequestAdapter } from "next/dist/server/web/spec-extension/adapters/next-request";
+import { Readable } from "node:stream";
+import { PlaidOperationError } from "../../../../lib/plaidOperations";
 
 const request = (origin?: string) => new Request("http://localhost/api/plaid/refresh?user_id=user-b", {
   method: "POST",
@@ -169,6 +172,34 @@ describe("Plaid refresh route", () => {
     const response = await POST(request());
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: "Unable to refresh Plaid connections" });
+    expect(await response.json()).toEqual({ error: "Unable to refresh Plaid connections", stage: "credential_loading", category: "unexpected" });
+  });
+
+  it("accepts a zero-byte POST stream supplied by the Next Node adapter", async () => {
+    mocks.getAuthenticatedPlaidContext.mockResolvedValue({ userId: "user-a", supabase: {} });
+    mocks.refreshFinancialData.mockResolvedValue({ success: true, status: "completed", items: [] });
+    const streamed = NextRequestAdapter.fromNodeNextRequest({
+      method: "POST", url: "http://localhost/api/plaid/refresh", headers: {}, body: Readable.from([]),
+    } as unknown as Parameters<typeof NextRequestAdapter.fromNodeNextRequest>[0], new AbortController().signal);
+    expect(streamed.body).not.toBeNull();
+    expect((await POST(streamed)).status).toBe(200);
+    expect(mocks.refreshFinancialData).toHaveBeenCalledOnce();
+  });
+
+  it.each(["{}", " ", "not-json"])("rejects actual body bytes before Plaid work: %s", async body => {
+    mocks.getAuthenticatedPlaidContext.mockResolvedValue({ userId: "user-a", supabase: {} });
+    expect((await POST(new Request("http://localhost/api/plaid/refresh", { method: "POST", body }))).status).toBe(400);
+    expect(mocks.getUserPlaidClient).not.toHaveBeenCalled();
+  });
+
+  it("preserves actionable credential errors and logs only stage/category", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    mocks.getAuthenticatedPlaidContext.mockResolvedValue({ userId: "user-a", supabase: {} });
+    mocks.getUserPlaidClient.mockRejectedValueOnce(new PlaidOperationError("Check personal credentials in Settings", 409));
+    const response = await POST(request());
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "Check personal credentials in Settings", stage: "credential_loading", category: "operation" });
+    expect(warn).toHaveBeenCalledWith("Plaid refresh failed", { stage: "credential_loading", category: "operation" });
+    warn.mockRestore();
   });
 });

@@ -53,6 +53,7 @@ export type ItemRefreshResult = {
   status: "success" | "error";
   errors: string[];
   warnings: string[];
+  failed_stages?: Array<"ownership" | "token_decryption" | "accounts" | "transactions" | "investments">;
 };
 
 export type FinancialSyncResult = {
@@ -436,6 +437,7 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
   if (!context.credentialId || item.credential_id !== context.credentialId || item.connection_status !== "active") {
     result.status = "error";
     result.errors.push("Connection needs reconnection with personal credentials.");
+    result.failed_stages = ["ownership"];
     return result;
   }
   try {
@@ -443,6 +445,7 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
   } catch {
     result.status = "error";
     result.errors.push("Unable to unlock this connection. Check server encryption configuration.");
+    result.failed_stages = ["token_decryption"];
     return result;
   }
   const steps = [refreshAccounts];
@@ -456,6 +459,9 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
       result.status = "error";
       void error;
       result.errors.push("Refresh step failed. Check connection and product access.");
+      const stage = step === refreshAccounts ? "accounts" : step === refreshTransactions ? "transactions" : "investments";
+      (result.failed_stages ??= []).push(stage);
+      console.warn("Plaid sync step failed", { stage, category: "sync_step_failed" });
     }
   }
   return result;

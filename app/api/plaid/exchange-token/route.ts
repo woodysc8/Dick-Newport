@@ -22,11 +22,20 @@ export async function POST(request: Request) {
     const response = await client.itemPublicTokenExchange({ public_token: body.public_token.trim() });
     const { item_id: itemId, access_token: accessToken } = response.data;
     let persisted = false;
+    let cleanupSafe = false;
     try {
       const { data: existing, error } = await context.supabase.from("plaid_items")
-        .select("id").eq("user_id", context.userId).eq("plaid_item_id", itemId).maybeSingle();
+        .select("id, user_id, credential_id").eq("plaid_item_id", itemId).maybeSingle();
       if (error) throw new Error();
-      if (existing) throw new PlaidOperationError("This connection is already saved", 409);
+      if (existing) {
+        // Never revoke or overwrite a saved Item on repeated finalization.
+        if (existing.user_id !== context.userId || existing.credential_id !== credentialId) {
+          throw new PlaidOperationError("This connection is already saved with another credential record. Refresh the existing connection instead.", 409);
+        }
+        persisted = true;
+        return { connected: true, plaid_item_id: itemId, institution_name: null };
+      }
+      cleanupSafe = true;
       const { error: saveError } = await context.supabase.from("plaid_items").insert({
         user_id: context.userId, plaid_item_id: itemId,
         access_token: encryptPlaidSecret(accessToken, `item:${context.userId}:${credentialId}:${itemId}`),
@@ -36,7 +45,14 @@ export async function POST(request: Request) {
       persisted = true;
       return { connected: true, plaid_item_id: itemId, institution_name: null };
     } finally {
-      if (!persisted) { try { await client.itemRemove({ access_token: accessToken }); } catch { /* Never log provider errors. */ } }
+      if (!persisted && cleanupSafe) {
+        try {
+          // A conflicting insert can have saved the same Item since the first lookup.
+          const { data: saved, error } = await context.supabase.from("plaid_items")
+            .select("id").eq("plaid_item_id", itemId).maybeSingle();
+          if (!error && !saved) await client.itemRemove({ access_token: accessToken });
+        } catch { /* Never log provider errors or revoke on an ambiguous lookup. */ }
+      }
     }
   });
 }
