@@ -1,4 +1,5 @@
 import type { PlaidApi } from "plaid";
+import { decryptPlaidSecret } from "./plaidEncryption";
 import { calculateSecuritiesOnlyValue } from "./investmentSnapshots";
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
 
@@ -8,12 +9,14 @@ export type PlaidRefreshContext = {
   userId: PlaidUserContext["userId"];
   supabase: PlaidUserContext["supabase"];
   plaidClient: PlaidApi;
+  credentialId: string;
   readonly [plaidRefreshContextBrand]: true;
 };
 
 export function createPlaidRefreshContext(
   authenticatedContext: PlaidUserContext,
   plaidClient: PlaidApi,
+  credentialId: string,
 ): PlaidRefreshContext {
   if (!isAuthenticatedPlaidContext(authenticatedContext)) {
     throw new Error("Financial refresh requires a verified authenticated context");
@@ -22,11 +25,15 @@ export function createPlaidRefreshContext(
     userId: authenticatedContext.userId,
     supabase: authenticatedContext.supabase,
     plaidClient,
+    credentialId,
     [plaidRefreshContextBrand]: true,
   };
 }
 
 type StoredItem = {
+  credential_id: string;
+  connection_status: string;
+  products: string[];
   plaid_item_id: string;
   access_token: string;
   institution_name: string | null;
@@ -58,41 +65,13 @@ const SYNC_LEASE_MS = 15 * 60 * 1000;
 const localRefreshes = new Map<string, Promise<FinancialSyncResult>>();
 
 function formattedPlaidError(operation: string, error: unknown): string {
-  const candidate = (error !== null && typeof error === "object" ? error : {}) as {
-    message?: unknown;
-    status?: unknown;
-    response?: {
-      status?: unknown;
-      data?: {
-        error_code?: unknown;
-        error_type?: unknown;
-        error_message?: unknown;
-      };
-    };
-  };
-  const responseData = candidate.response?.data;
-  const status = typeof candidate.response?.status === "number"
-    ? candidate.response.status
-    : typeof candidate.status === "number"
-      ? candidate.status
-      : null;
-  const details = [
-    typeof responseData?.error_code === "string" ? responseData.error_code : null,
-    typeof responseData?.error_type === "string" ? responseData.error_type : null,
-    typeof responseData?.error_message === "string" ? responseData.error_message : null,
-  ].filter((detail): detail is string => detail != null);
-  const fallback = typeof candidate.message === "string"
-    ? candidate.message
-    : typeof error === "string"
-      ? error
-      : "Plaid request failed";
-
-  return `${operation} failed${status == null ? "" : ` (${status})`}: ${details.length > 0 ? details.join(" - ") : fallback}`;
+  void error;
+  return `${operation} failed. Check connection and product access.`;
 }
 
 function investmentsUnavailable(error: unknown) {
   const code = (error as { response?: { data?: { error_code?: string } } })?.response?.data?.error_code;
-  return code === "PRODUCT_NOT_SUPPORTED" || code === "PRODUCT_NOT_READY" || code === "INVALID_PRODUCT";
+  return code === "PRODUCT_NOT_SUPPORTED" || code === "PRODUCT_NOT_READY" || code === "INVALID_PRODUCT" || code === "ACCESS_NOT_GRANTED" || code === "ADDITIONAL_CONSENT_REQUIRED";
 }
 
 function isInvestmentAccount(account: { type?: string | null; subtype?: string | null }) {
@@ -138,7 +117,7 @@ async function persistDailyInvestmentSnapshot(
     },
     { onConflict: "user_id,plaid_account_id,snapshot_date" },
   );
-  if (error) throw new Error(`Investment snapshot persistence failed: ${error.message}`);
+  if (error) throw new Error(`Investment snapshot persistence failed: request failed`);
 }
 
 async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, result: ItemRefreshResult) {
@@ -172,11 +151,11 @@ async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, r
       .eq("plaid_item_id", item.plaid_item_id)
       .eq("plaid_account_id", account.account_id)
       .maybeSingle();
-    if (lookupError) throw new Error(`Account lookup failed: ${lookupError.message}`);
+    if (lookupError) throw new Error(`Account lookup failed: request failed`);
 
     if (existing) {
       const { error } = await context.supabase.from("accounts").update(accountData).eq("id", existing.id).eq("user_id", context.userId);
-      if (error) throw new Error(`Account update failed: ${error.message}`);
+      if (error) throw new Error(`Account update failed: request failed`);
       result.accounts_updated += 1;
       continue;
     }
@@ -186,7 +165,7 @@ async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, r
       result.accounts_created += 1;
       continue;
     }
-    if (!isUniqueViolation(insertError)) throw new Error(`Account insert failed: ${insertError.message}`);
+    if (!isUniqueViolation(insertError)) throw new Error(`Account insert failed: request failed`);
 
     const { data: raced, error: racedLookupError } = await context.supabase
       .from("accounts")
@@ -195,7 +174,7 @@ async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, r
       .eq("plaid_item_id", item.plaid_item_id)
       .eq("plaid_account_id", account.account_id)
       .maybeSingle();
-    if (racedLookupError || !raced) throw new Error(`Account conflict recovery failed: ${racedLookupError?.message ?? "account not found"}`);
+    if (racedLookupError || !raced) throw new Error(`Account conflict recovery failed: account not found`);
     const { error: recoveryError } = await context.supabase
     .from("accounts")
     .update(accountData)
@@ -203,7 +182,7 @@ async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, r
     .eq("user_id", context.userId)
     .eq("plaid_item_id", item.plaid_item_id)
     .eq("plaid_account_id", account.account_id);
-    if (recoveryError) throw new Error(`Account conflict recovery failed: ${recoveryError.message}`);
+    if (recoveryError) throw new Error(`Account conflict recovery failed: request failed`);
     result.accounts_updated += 1;
   }
 }
@@ -217,7 +196,7 @@ async function localAccountId(context: PlaidRefreshContext, item: StoredItem, pl
     .eq("plaid_item_id", item.plaid_item_id)
     .eq("plaid_account_id", plaidAccountId)
     .maybeSingle();
-  if (error) throw new Error(`Transaction account lookup failed: ${error.message}`);
+  if (error) throw new Error(`Transaction account lookup failed: request failed`);
   return data?.id ?? null;
 }
 
@@ -249,7 +228,7 @@ async function removeLinkedPendingTransaction(
     .eq("plaid_transaction_id", pendingTransactionId)
     .eq("pending", true)
     .select("id");
-  if (error) throw new Error(`Pending transaction reconciliation failed: ${error.message}`);
+  if (error) throw new Error(`Pending transaction reconciliation failed: request failed`);
   return data?.length ?? 0;
 }
 
@@ -284,11 +263,11 @@ async function persistTransaction(
     .eq("user_id", context.userId)
     .eq("plaid_transaction_id", transaction.transaction_id)
     .maybeSingle();
-  if (lookupError) throw new Error(`Transaction lookup failed: ${lookupError.message}`);
+  if (lookupError) throw new Error(`Transaction lookup failed: request failed`);
 
   if (existing) {
     const { error } = await context.supabase.from("transactions").update(payload).eq("id", existing.id).eq("user_id", context.userId);
-    if (error) throw new Error(`Transaction update failed: ${error.message}`);
+    if (error) throw new Error(`Transaction update failed: request failed`);
     result.transactions_modified += 1;
     return;
   }
@@ -299,7 +278,7 @@ async function persistTransaction(
     else result.transactions_added += 1;
     return;
   }
-  if (!isUniqueViolation(insertError)) throw new Error(`Transaction insert failed: ${insertError.message}`);
+  if (!isUniqueViolation(insertError)) throw new Error(`Transaction insert failed: request failed`);
 
   const { data: raced, error: racedLookupError } = await context.supabase
     .from("transactions")
@@ -307,14 +286,14 @@ async function persistTransaction(
     .eq("user_id", context.userId)
     .eq("plaid_transaction_id", transaction.transaction_id)
     .maybeSingle();
-  if (racedLookupError || !raced) throw new Error(`Transaction conflict recovery failed: ${racedLookupError?.message ?? "transaction not found"}`);
+  if (racedLookupError || !raced) throw new Error(`Transaction conflict recovery failed: transaction not found`);
   const { error: recoveryError } = await context.supabase
     .from("transactions")
     .update(payload)
     .eq("id", raced.id)
     .eq("user_id", context.userId)
     .eq("plaid_transaction_id", transaction.transaction_id);
-  if (recoveryError) throw new Error(`Transaction conflict recovery failed: ${recoveryError.message}`);
+  if (recoveryError) throw new Error(`Transaction conflict recovery failed: request failed`);
   result.transactions_modified += 1;
 }
 
@@ -338,7 +317,7 @@ async function refreshTransactions(context: PlaidRefreshContext, item: StoredIte
         .eq("user_id", context.userId)
         .eq("plaid_transaction_id", removed.transaction_id)
         .select("id");
-      if (error) throw new Error(`Transaction delete failed: ${error.message}`);
+      if (error) throw new Error(`Transaction delete failed: request failed`);
       result.transactions_removed += deleted?.length ?? 0;
     }
     const nextCursor = response.data.next_cursor;
@@ -347,7 +326,7 @@ async function refreshTransactions(context: PlaidRefreshContext, item: StoredIte
       .update({ transactions_cursor: nextCursor, updated_at: new Date().toISOString() })
       .eq("user_id", context.userId)
       .eq("plaid_item_id", item.plaid_item_id);
-    if (cursorError) throw new Error(`Transaction cursor persistence failed: ${cursorError.message}`);
+    if (cursorError) throw new Error(`Transaction cursor persistence failed: request failed`);
     cursor = nextCursor;
     hasMore = response.data.has_more;
   }
@@ -359,7 +338,7 @@ async function refreshHoldings(context: PlaidRefreshContext, item: StoredItem, r
     .select("plaid_account_id, account_type, account_subtype, current_balance")
     .eq("user_id", context.userId)
     .eq("plaid_item_id", item.plaid_item_id);
-  if (itemAccountsError) throw new Error(`Investment account lookup failed: ${itemAccountsError.message}`);
+  if (itemAccountsError) throw new Error(`Investment account lookup failed: request failed`);
   if (!(itemAccounts ?? []).some((account) => isInvestmentAccount({ type: account.account_type, subtype: account.account_subtype }))) return;
 
   let response;
@@ -408,7 +387,7 @@ async function refreshHoldings(context: PlaidRefreshContext, item: StoredItem, r
       holdingData,
       { onConflict: "user_id,plaid_account_id,security_id" },
     );
-    if (error) throw new Error(`Holding persistence failed: ${error.message}`);
+    if (error) throw new Error(`Holding persistence failed: request failed`);
     result.holdings_updated += 1;
   }
 
@@ -417,11 +396,11 @@ async function refreshHoldings(context: PlaidRefreshContext, item: StoredItem, r
     .select("id, plaid_account_id, security_id")
     .eq("user_id", context.userId)
     .eq("plaid_item_id", item.plaid_item_id);
-  if (storedError) throw new Error(`Stored holdings lookup failed: ${storedError.message}`);
+  if (storedError) throw new Error(`Stored holdings lookup failed: request failed`);
   for (const storedHolding of storedHoldings ?? []) {
     if (currentKeys.has(`${storedHolding.plaid_account_id}:${storedHolding.security_id}`)) continue;
     const { error } = await context.supabase.from("investment_holdings").delete().eq("id", storedHolding.id).eq("user_id", context.userId);
-    if (error) throw new Error(`Stale holding removal failed: ${error.message}`);
+    if (error) throw new Error(`Stale holding removal failed: request failed`);
     result.holdings_removed += 1;
   }
 
@@ -454,14 +433,29 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
     errors: [],
     warnings: [],
   };
-  for (const step of [refreshAccounts, refreshTransactions, refreshHoldings]) {
+  if (!context.credentialId || item.credential_id !== context.credentialId || item.connection_status !== "active") {
+    result.status = "error";
+    result.errors.push("Connection needs reconnection with personal credentials.");
+    return result;
+  }
+  try {
+    item = { ...item, access_token: decryptPlaidSecret(item.access_token, `item:${context.userId}:${item.credential_id}:${item.plaid_item_id}`) };
+  } catch {
+    result.status = "error";
+    result.errors.push("Unable to unlock this connection. Check server encryption configuration.");
+    return result;
+  }
+  const steps = [refreshAccounts];
+  if (item.products.includes("transactions")) steps.push(refreshTransactions);
+  if (item.products.includes("investments")) steps.push(refreshHoldings);
+  else result.warnings.push("Investments were not enabled for this connection.");
+  for (const step of steps) {
     try {
       await step(context, item, result);
     } catch (error) {
       result.status = "error";
-      const message = error instanceof Error ? error.message : "Refresh step failed";
-      result.errors.push(message);
-      console.error(`Plaid refresh failed for Item ${item.plaid_item_id}:`, message);
+      void error;
+      result.errors.push("Refresh step failed. Check connection and product access.");
     }
   }
   return result;
@@ -477,7 +471,7 @@ async function acquireFinancialSyncLease(context: PlaidRefreshContext) {
     .or(`plaid_sync_lock_token.is.null,plaid_sync_locked_at.lt.${staleBefore}`)
     .select("id")
     .maybeSingle();
-  if (error) throw new Error(`Financial sync lock acquisition failed: ${error.message}`);
+  if (error) throw new Error(`Financial sync lock acquisition failed: request failed`);
   return data ? token : null;
 }
 
@@ -487,7 +481,7 @@ async function releaseFinancialSyncLease(context: PlaidRefreshContext, token: st
     .update({ plaid_sync_lock_token: null, plaid_sync_locked_at: null })
     .eq("id", context.userId)
     .eq("plaid_sync_lock_token", token);
-  if (error) console.error("Financial sync lock release failed:", error.message);
+  if (error) console.error("Financial sync lock release failed");
 }
 
 async function runFinancialDataRefresh(context: PlaidRefreshContext): Promise<FinancialSyncResult> {
@@ -496,9 +490,9 @@ async function runFinancialDataRefresh(context: PlaidRefreshContext): Promise<Fi
   try {
     const { data, error } = await context.supabase
       .from("plaid_items")
-      .select("plaid_item_id, access_token, institution_name, transactions_cursor")
+      .select("plaid_item_id, access_token, institution_name, transactions_cursor, credential_id, connection_status, products")
       .eq("user_id", context.userId);
-    if (error) throw new Error(`Plaid Item lookup failed: ${error.message}`);
+    if (error) throw new Error(`Plaid Item lookup failed: request failed`);
     const items = (data ?? []) as StoredItem[];
     const results = await Promise.all(items.map((item) => refreshItem(context, item)));
     return { success: results.every((item) => item.status === "success"), status: "completed", items: results };

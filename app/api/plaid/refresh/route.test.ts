@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getAuthenticatedPlaidContext: vi.fn(),
-  createPlaidClient: vi.fn(),
+  getUserPlaidClient: vi.fn(),
   createPlaidRefreshContext: vi.fn(),
   refreshFinancialData: vi.fn(),
 }));
@@ -11,13 +11,14 @@ vi.mock("../../../../lib/plaidTenant", () => ({
   getAuthenticatedPlaidContext: mocks.getAuthenticatedPlaidContext,
 }));
 vi.mock("../../../../lib/plaidClient", () => ({
-  createPlaidClient: mocks.createPlaidClient,
+  getUserPlaidClient: mocks.getUserPlaidClient,
 }));
 vi.mock("../../../../lib/plaidRefresh", () => ({
   createPlaidRefreshContext: mocks.createPlaidRefreshContext,
   refreshFinancialData: mocks.refreshFinancialData,
 }));
 
+vi.mock("../../../../lib/plaidOperations", () => ({ withPlaidOperation: (_context: unknown, work: () => Promise<unknown>) => work() }));
 import { POST } from "./route";
 
 const request = (origin?: string) => new Request("http://localhost/api/plaid/refresh?user_id=user-b", {
@@ -29,7 +30,7 @@ describe("Plaid refresh route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.NEXT_PUBLIC_SITE_URL;
-    mocks.createPlaidClient.mockReturnValue({ plaid: "server-client" });
+    mocks.getUserPlaidClient.mockResolvedValue({ client: { plaid: "server-client" }, credentialId: "credential-a" });
     mocks.createPlaidRefreshContext.mockImplementation((context: unknown, plaidClient: unknown) => ({
       context,
       plaidClient,
@@ -42,7 +43,7 @@ describe("Plaid refresh route", () => {
     const response = await POST(request());
 
     expect(response.status).toBe(401);
-    expect(mocks.createPlaidClient).not.toHaveBeenCalled();
+    expect(mocks.getUserPlaidClient).not.toHaveBeenCalled();
     expect(mocks.refreshFinancialData).not.toHaveBeenCalled();
   });
 
@@ -67,7 +68,7 @@ describe("Plaid refresh route", () => {
 
     expect(response.status).toBe(403);
     expect(mocks.getAuthenticatedPlaidContext).not.toHaveBeenCalled();
-    expect(mocks.createPlaidClient).not.toHaveBeenCalled();
+    expect(mocks.getUserPlaidClient).not.toHaveBeenCalled();
   });
 
   it("uses the verified context and ignores request-supplied user IDs", async () => {
@@ -100,6 +101,7 @@ describe("Plaid refresh route", () => {
     expect(mocks.createPlaidRefreshContext).toHaveBeenCalledWith(
       authenticatedContext,
       { plaid: "server-client" },
+      "credential-a",
     );
     expect(mocks.refreshFinancialData).toHaveBeenCalledWith(refreshContext);
     expect((await response.json()).items[0]).toMatchObject({
@@ -160,7 +162,7 @@ describe("Plaid refresh route", () => {
 
   it("fails safely for invalid Plaid configuration or refresh failures", async () => {
     mocks.getAuthenticatedPlaidContext.mockResolvedValue({ userId: "user-a", supabase: {} });
-    mocks.createPlaidClient.mockImplementation(() => {
+    mocks.getUserPlaidClient.mockImplementation(() => {
       throw new Error("Plaid credentials are not configured");
     });
 

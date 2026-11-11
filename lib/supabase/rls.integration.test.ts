@@ -559,7 +559,7 @@ async function testPlaidItemsAreClientInaccessible(args: {
     const result = await admin.from("plaid_items").insert({
       user_id: userId,
       plaid_item_id,
-      access_token: "synthetic-not-a-valid-token",
+      access_token: "v1.synthetic-not-a-valid-token",
       institution_name: "Synthetic RLS Test Institution",
     }).select("id").single();
     expect(result.error).toBeNull();
@@ -577,13 +577,13 @@ async function testPlaidItemsAreClientInaccessible(args: {
 
   const clientWrites = await Promise.all([
     userA.from("plaid_items").insert({
-      user_id: idB, plaid_item_id: attemptedA, access_token: "synthetic-not-a-valid-token",
+      user_id: idB, plaid_item_id: attemptedA, access_token: "v1.synthetic-not-a-valid-token",
     }).select("id"),
     userB.from("plaid_items").insert({
-      user_id: idA, plaid_item_id: attemptedB, access_token: "synthetic-not-a-valid-token",
+      user_id: idA, plaid_item_id: attemptedB, access_token: "v1.synthetic-not-a-valid-token",
     }).select("id"),
     anonymous.from("plaid_items").insert({
-      user_id: idA, plaid_item_id: anonymousAttempt, access_token: "synthetic-not-a-valid-token",
+      user_id: idA, plaid_item_id: anonymousAttempt, access_token: "v1.synthetic-not-a-valid-token",
     }).select("id"),
   ]);
   clientWrites.forEach(expectBlocked);
@@ -605,8 +605,8 @@ async function testPlaidItemsAreClientInaccessible(args: {
   expect(data).toHaveLength(2);
   expect(data?.map(({ user_id, plaid_item_id, access_token }) => ({ user_id, plaid_item_id, access_token })))
     .toEqual([
-      { user_id: idA, plaid_item_id: itemA, access_token: "synthetic-not-a-valid-token" },
-      { user_id: idB, plaid_item_id: itemB, access_token: "synthetic-not-a-valid-token" },
+      { user_id: idA, plaid_item_id: itemA, access_token: "v1.synthetic-not-a-valid-token" },
+      { user_id: idB, plaid_item_id: itemB, access_token: "v1.synthetic-not-a-valid-token" },
     ]);
   const inserted = await admin.from("plaid_items").select("id").in("plaid_item_id", [attemptedA, attemptedB, anonymousAttempt]);
   expect(inserted.error).toBeNull();

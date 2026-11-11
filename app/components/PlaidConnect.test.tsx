@@ -15,11 +15,11 @@ describe("Plaid dashboard request flow", () => {
 
   it("requests a Link token without sending user or Item identifiers", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ link_token: "link-token", expiration: "2030-01-01T00:00:00Z" }), { status: 200 }),
+      new Response(JSON.stringify({ link_token: "link-token", expiration: "2030-01-01T00:00:00Z", credential_session: "session" }), { status: 200 }),
     );
 
-    await expect(requestPlaidLinkToken()).resolves.toEqual({ token: "link-token", expiration: "2030-01-01T00:00:00Z" });
-    expect(fetchMock).toHaveBeenCalledWith("/api/plaid/create-link-token", { method: "POST" });
+    await expect(requestPlaidLinkToken()).resolves.toEqual({ token: "link-token", expiration: "2030-01-01T00:00:00Z", credentialSession: "session" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/plaid/create-link-token", expect.objectContaining({ method: "POST", body: JSON.stringify({ product: "transactions" }) }));
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("user_id");
   });
 
@@ -48,10 +48,10 @@ describe("Plaid dashboard request flow", () => {
       new Response(JSON.stringify({ connected: true }), { status: 200 }),
     );
 
-    await exchangePlaidPublicToken("public-token");
+    await exchangePlaidPublicToken("public-token", "session");
     expect(fetchMock).toHaveBeenCalledWith("/api/plaid/exchange-token", expect.objectContaining({
       method: "POST",
-      body: JSON.stringify({ public_token: "public-token" }),
+      body: JSON.stringify({ public_token: "public-token", credential_session: "session" }),
     }));
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("access_token");
     expect(JSON.stringify(fetchMock.mock.calls)).not.toContain("user_id");
@@ -97,12 +97,12 @@ describe("Plaid dashboard request flow", () => {
       new Response(JSON.stringify({ error: "Unable to save Plaid connection" }), { status: 500 }),
     );
 
-    await expect(exchangePlaidPublicToken("public-token")).rejects.toThrow("Unable to save Plaid connection");
+    await expect(exchangePlaidPublicToken("public-token", "session")).rejects.toThrow("Unable to save Plaid connection");
   });
 
   it("does not call disabled investment or repair routes", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ link_token: "link-token", expiration: "2030-01-01T00:00:00Z" }), { status: 200 }),
+      new Response(JSON.stringify({ link_token: "link-token", expiration: "2030-01-01T00:00:00Z", credential_session: "session" }), { status: 200 }),
     );
 
     await requestPlaidLinkToken();

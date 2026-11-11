@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPlaidRefreshContext, type PlaidRefreshContext } from "./plaidRefresh";
 import { getAuthenticatedPlaidContext } from "./plaidTenant";
+import { encryptPlaidSecret } from "./plaidEncryption";
 
 const authMocks = vi.hoisted(() => ({
   getAuthenticatedSupabaseContext: vi.fn(),
@@ -161,6 +162,11 @@ function matches(row: Row, filters: Record<string, unknown>) {
 }
 
 async function context(userId: string, items: Row[], plaidClient: Record<string, unknown>): Promise<PlaidRefreshContext> {
+  for (const item of items) {
+    if (typeof item.access_token === "string" && !item.access_token.startsWith("v1.")) {
+      item.access_token = encryptPlaidSecret(item.access_token, `item:${item.user_id}:${item.credential_id}:${item.plaid_item_id}`);
+    }
+  }
   const supabase = fakeSupabase();
   authMocks.getAuthenticatedSupabaseContext.mockResolvedValueOnce({
     user: { id: userId },
@@ -169,11 +175,51 @@ async function context(userId: string, items: Row[], plaidClient: Record<string,
   authMocks.createClient.mockReturnValueOnce(supabase);
   const authenticatedContext = await getAuthenticatedPlaidContext(new Request("http://localhost"));
   if (!authenticatedContext) throw new Error("Expected authenticated context");
-  return createPlaidRefreshContext(authenticatedContext, plaidClient as never);
+  return createPlaidRefreshContext(authenticatedContext, plaidClient as never, "credential-a");
 }
 
 describe("tenant-safe financial refresh", () => {
+  it("blocks legacy, revoked, and unrelated credential versions before any provider request", async () => {
+    const { refreshFinancialData } = await import("./plaidRefresh");
+    for (const [credentialId, status] of [[null, "reconnect_required"], ["old-version", "active"], ["credential-a", "revoked"]]) {
+      state.items = [{ user_id: "user-a", plaid_item_id: "item-a", access_token: "synthetic-token", credential_id: credentialId, connection_status: status, products: ["transactions"] }];
+      const client = { accountsGet: vi.fn(), transactionsSync: vi.fn(), investmentsHoldingsGet: vi.fn() };
+      const result = await refreshFinancialData(await context("user-a", state.items, client));
+      expect(result.success).toBe(false);
+      expect(client.accountsGet).not.toHaveBeenCalled();
+      expect(client.transactionsSync).not.toHaveBeenCalled();
+    }
+  });
+
+  it("preserves missing balances as null and skips products absent from the connection", async () => {
+    state.items = [{ user_id: "user-a", plaid_item_id: "item-a", access_token: "synthetic-token", credential_id: "credential-a", connection_status: "active", products: [] }];
+    const client = {
+      accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [{ account_id: "account-a", type: "investment", balances: { current: null, available: null } }] } }),
+      transactionsSync: vi.fn(), investmentsHoldingsGet: vi.fn(),
+    };
+    const { refreshFinancialData } = await import("./plaidRefresh");
+    const result = await refreshFinancialData(await context("user-a", state.items, client));
+    expect(result.success).toBe(true);
+    expect(state.accounts[0]).toMatchObject({ current_balance: null, available_balance: null });
+    expect(client.transactionsSync).not.toHaveBeenCalled();
+    expect(client.investmentsHoldingsGet).not.toHaveBeenCalled();
+  });
+
+  it("preserves saved holdings when investment access is unavailable", async () => {
+    state.items = [{ user_id: "user-a", plaid_item_id: "item-a", access_token: "synthetic-token", credential_id: "credential-a", connection_status: "active", products: ["investments"] }];
+    state.accounts = [{ user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a", account_type: "investment", current_balance: null }];
+    state.holdings = [{ id: "historic-holding", user_id: "user-a", plaid_item_id: "item-a" }];
+    const client = { accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [] } }),
+      investmentsHoldingsGet: vi.fn().mockRejectedValue({ response: { data: { error_code: "ACCESS_NOT_GRANTED", error_message: "sensitive-value" } } }) };
+    const { refreshFinancialData } = await import("./plaidRefresh");
+    const result = await refreshFinancialData(await context("user-a", state.items, client));
+    expect(result.items[0].warnings).toContain("Investments are not available for this Item.");
+    expect(state.holdings).toHaveLength(1);
+    expect(state.snapshots).toHaveLength(0);
+    expect(JSON.stringify(result)).not.toContain("sensitive-value");
+  });
   beforeEach(() => {
+    process.env.PLAID_CREDENTIAL_ENCRYPTION_KEY = Buffer.alloc(32, 1).toString("base64");
     state.items = [];
     state.accounts = [];
     state.transactions = [];
@@ -191,7 +237,7 @@ describe("tenant-safe financial refresh", () => {
   });
 
   it("coalesces overlapping refreshes per user", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "server-token", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "server-token", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     const plaidClient = {
       accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [] } }),
       transactionsSync: vi.fn().mockResolvedValue({ data: { added: [], modified: [], removed: [], next_cursor: "cursor-a", has_more: false } }),
@@ -220,7 +266,7 @@ describe("tenant-safe financial refresh", () => {
     expect(() => createPlaidRefreshContext({
       userId: "user-b",
       supabase: fakeSupabase() as never,
-    } as never, {} as never)).toThrow("verified authenticated context");
+    } as never, {} as never, "credential-a")).toThrow("verified authenticated context");
   });
 
   it("uses the verified Auth user when constructing a refresh context", async () => {
@@ -232,12 +278,12 @@ describe("tenant-safe financial refresh", () => {
     authMocks.getAuthenticatedSupabaseContext.mockResolvedValueOnce(null);
     const authenticatedContext = await getAuthenticatedPlaidContext(new Request("http://localhost"));
     expect(authenticatedContext).toBeNull();
-    expect(() => createPlaidRefreshContext(authenticatedContext as never, {} as never))
+    expect(() => createPlaidRefreshContext(authenticatedContext as never, {} as never, "credential-a"))
       .toThrow("verified authenticated context");
   });
 
   it("keeps repeated account and transaction syncs idempotent and preserves missing currency", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "server-token", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "server-token", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     const plaidClient = {
       accountsGet: vi.fn().mockResolvedValue({
         data: {
@@ -274,8 +320,8 @@ describe("tenant-safe financial refresh", () => {
 
   it("never refreshes another user's Item or data", async () => {
     state.items.push(
-      { user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null },
-      { user_id: "user-b", plaid_item_id: "item-b", access_token: "token-b", institution_name: "Bank B", transactions_cursor: null },
+      { user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] },
+      { user_id: "user-b", plaid_item_id: "item-b", access_token: "token-b", institution_name: "Bank B", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] },
     );
     const plaidClient = {
       accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [] } }),
@@ -291,7 +337,7 @@ describe("tenant-safe financial refresh", () => {
   });
 
   it("progresses through multiple transaction pages and persists each cursor", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     const plaidClient = {
       accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [] } }),
       transactionsSync: vi.fn()
@@ -308,7 +354,7 @@ describe("tenant-safe financial refresh", () => {
   });
 
   it("reconciles a posted transaction with its pending predecessor across pages and on replay", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     state.accounts.push({ id: "account-row", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a" });
     state.transactions.push(
       { id: "pending-row", user_id: "user-a", account_id: "account-row", plaid_transaction_id: "pending-txn", pending: true, name: "Coffee" },
@@ -358,7 +404,7 @@ describe("tenant-safe financial refresh", () => {
   });
 
   it("recovers account and transaction insert races with complete identity filters", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     state.accounts.push({ id: "account-row", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a" });
     state.transactions.push({ id: "transaction-row", user_id: "user-a", plaid_transaction_id: "transaction-a" });
     state.forceAccountRace = true;
@@ -382,7 +428,7 @@ describe("tenant-safe financial refresh", () => {
   });
 
   it("surfaces recovery update failures instead of reporting a successful item", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     state.accounts.push({ id: "account-row", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a" });
     state.forceAccountRace = true;
     state.failRecoveryUpdate = true;
@@ -397,11 +443,11 @@ describe("tenant-safe financial refresh", () => {
     const result = await refreshFinancialData(await context("user-a", state.items, plaidClient));
 
     expect(result.items[0]).toMatchObject({ status: "error" });
-    expect(result.items[0].errors.join(" ")).toContain("recovery update failed");
+    expect(result.items[0].errors.join(" ")).toContain("Refresh step failed");
   });
 
   it("upserts holdings, removes stale holdings, and writes a currency-safe snapshot", async () => {
-    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Robinhood", transactions_cursor: null });
+    state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Robinhood", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     state.accounts.push({ id: "account-row", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a", account_type: "investment", current_balance: 125 });
     state.holdings.push({ id: "stale", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a", security_id: "old" });
     const plaidClient = {

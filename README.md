@@ -1,5 +1,7 @@
 This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
 
+For individual developer credentials, migration prerequisites, family setup, and recovery instructions, see [Personal Plaid setup](docs/personal-plaid-setup.md).
+
 ## Getting Started
 
 First, run the development server:

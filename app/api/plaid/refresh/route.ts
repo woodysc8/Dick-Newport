@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { createPlaidClient } from "../../../../lib/plaidClient";
+import { getUserPlaidClient } from "../../../../lib/plaidClient";
+import { withPlaidOperation } from "../../../../lib/plaidOperations";
 import { createPlaidRefreshContext, refreshFinancialData } from "../../../../lib/plaidRefresh";
 import { isSameOriginRequest } from "../../../../lib/requestSecurity";
 import { getAuthenticatedPlaidContext } from "../../../../lib/plaidTenant";
@@ -18,10 +19,14 @@ export async function POST(request: Request) {
   if (!authenticatedContext) {
     return NextResponse.json({ error: "Authentication required" }, { status: 401 });
   }
+  if (request.body) return NextResponse.json({ error: "Refresh does not accept a request body" }, { status: 400 });
 
   try {
-    const refreshContext = createPlaidRefreshContext(authenticatedContext, createPlaidClient());
-    const result = await refreshFinancialData(refreshContext);
+    const result = await withPlaidOperation(authenticatedContext, async () => {
+      const { client, credentialId } = await getUserPlaidClient(authenticatedContext);
+      const refreshContext = createPlaidRefreshContext(authenticatedContext, client, credentialId);
+      return refreshFinancialData(refreshContext);
+    });
     return NextResponse.json({
       success: result.success,
       status: result.status,

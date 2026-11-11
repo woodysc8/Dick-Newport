@@ -1,58 +1,42 @@
-import { NextResponse } from "next/server";
-import { createPlaidClient } from "../../../../lib/plaidClient";
-import { getAuthenticatedPlaidContext } from "../../../../lib/plaidTenant";
+import { getUserPlaidClient } from "../../../../lib/plaidClient";
+import { decryptPlaidSecret, encryptPlaidSecret } from "../../../../lib/plaidEncryption";
+import { personalPlaidRoute } from "../../../../lib/plaidRoute";
+import { PlaidOperationError } from "../../../../lib/plaidOperations";
+import { readLimitedJson } from "../../../../lib/requestSecurity";
 
 export async function POST(request: Request) {
-  const context = await getAuthenticatedPlaidContext(request);
-  if (!context) return NextResponse.json({ error: "Authentication required" }, { status: 401 });
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json({ error: "A valid public token is required" }, { status: 400 });
-  }
-  const publicToken = body && typeof body === "object" && !Array.isArray(body)
-    ? (body as Record<string, unknown>).public_token
-    : null;
-  if (typeof publicToken !== "string" || publicToken.trim().length === 0 || publicToken.length > 512) {
-    return NextResponse.json({ error: "A valid public token is required" }, { status: 400 });
-  }
-
-  try {
-    const plaidResponse = await createPlaidClient().itemPublicTokenExchange({
-      public_token: publicToken.trim(),
-    });
-    const { item_id: plaidItemId, access_token: accessToken } = plaidResponse.data;
-    const { data: existingItem, error: existingError } = await context.supabase
-      .from("plaid_items")
-      .select("user_id, institution_name")
-      .eq("plaid_item_id", plaidItemId)
-      .maybeSingle();
-    if (existingError) throw new Error("Plaid Item lookup failed");
-    if (existingItem && existingItem.user_id !== context.userId) {
-      return NextResponse.json({ error: "This Plaid Item is already connected to another user" }, { status: 409 });
+  return personalPlaidRoute(request, async context => {
+    let body;
+    try { body = await readLimitedJson(request); } catch { throw new PlaidOperationError("A small JSON public token request is required"); }
+    if (Object.keys(body).some(key => !["public_token", "credential_session"].includes(key)) ||
+      typeof body.public_token !== "string" || !body.public_token.trim() || body.public_token.length > 512 ||
+      typeof body.credential_session !== "string" || body.credential_session.length > 2048) {
+      throw new PlaidOperationError("A public token and its credential session are required");
     }
-
-    const itemData = {
-      user_id: context.userId,
-      plaid_item_id: plaidItemId,
-      access_token: accessToken,
-      institution_name: existingItem?.institution_name ?? null,
-      updated_at: new Date().toISOString(),
-    };
-    const persistence = existingItem
-      ? context.supabase.from("plaid_items").update(itemData).eq("plaid_item_id", plaidItemId).eq("user_id", context.userId)
-      : context.supabase.from("plaid_items").insert(itemData);
-    const { error: persistenceError } = await persistence;
-    if (persistenceError) throw new Error("Plaid Item persistence failed");
-
-    return NextResponse.json({
-      connected: true,
-      plaid_item_id: plaidItemId,
-      institution_name: existingItem?.institution_name ?? null,
-    });
-  } catch {
-    return NextResponse.json({ error: "Unable to save Plaid connection" }, { status: 500 });
-  }
+    let session;
+    try { session = JSON.parse(decryptPlaidSecret(body.credential_session, `link:${context.userId}`)); }
+    catch { throw new PlaidOperationError("Invalid Link session. Start a new connection."); }
+    if (typeof session.credentialId !== "string" || !Number.isFinite(session.expires) || session.expires < Date.now() ||
+      !["transactions", "investments"].includes(session.product)) throw new PlaidOperationError("Link session expired. Start a new connection.");
+    const { client, credentialId } = await getUserPlaidClient(context, session.credentialId);
+    const response = await client.itemPublicTokenExchange({ public_token: body.public_token.trim() });
+    const { item_id: itemId, access_token: accessToken } = response.data;
+    let persisted = false;
+    try {
+      const { data: existing, error } = await context.supabase.from("plaid_items")
+        .select("id").eq("user_id", context.userId).eq("plaid_item_id", itemId).maybeSingle();
+      if (error) throw new Error();
+      if (existing) throw new PlaidOperationError("This connection is already saved", 409);
+      const { error: saveError } = await context.supabase.from("plaid_items").insert({
+        user_id: context.userId, plaid_item_id: itemId,
+        access_token: encryptPlaidSecret(accessToken, `item:${context.userId}:${credentialId}:${itemId}`),
+        credential_id: credentialId, connection_status: "active", products: [session.product],
+      });
+      if (saveError) throw new Error();
+      persisted = true;
+      return { connected: true, plaid_item_id: itemId, institution_name: null };
+    } finally {
+      if (!persisted) { try { await client.itemRemove({ access_token: accessToken }); } catch { /* Never log provider errors. */ } }
+    }
+  });
 }

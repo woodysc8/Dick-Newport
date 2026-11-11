@@ -1,59 +1,46 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const plaidMocks = vi.hoisted(() => ({
-  Configuration: vi.fn(),
-  PlaidApi: vi.fn(),
-}));
-
-vi.mock("plaid", () => ({
-  Configuration: plaidMocks.Configuration,
-  PlaidApi: plaidMocks.PlaidApi,
-  CountryCode: { Us: "US" },
-  Products: { Transactions: "transactions" },
-}));
-
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLinkTokenRequest, createPlaidClient } from "./plaidClient";
+import { decryptPlaidSecret, encryptPlaidSecret } from "./plaidEncryption";
+import { safePlaidError } from "./plaidOperations";
 
-describe("Plaid client configuration", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    process.env.PLAID_ENV = "sandbox";
-    process.env.PLAID_CLIENT_ID = "client-id";
-    process.env.PLAID_SECRET = "client-secret";
-    plaidMocks.Configuration.mockImplementation((value) => value);
-    plaidMocks.PlaidApi.mockImplementation((value) => ({ configuration: value }));
-  });
-
-  it("rejects missing or invalid environment values", () => {
-    for (const value of [undefined, "", "staging"]) {
-      if (value === undefined) delete process.env.PLAID_ENV;
-      else process.env.PLAID_ENV = value;
-      expect(() => createPlaidClient()).toThrow("Plaid environment is not configured");
+afterEach(() => vi.unstubAllEnvs());
+describe("personal Plaid encryption and configuration", () => {
+  it("uses randomized authenticated encryption bound to owner, version and environment", () => {
+    vi.stubEnv("PLAID_CREDENTIAL_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64"));
+    const ciphertext = encryptPlaidSecret("synthetic-secret", "a:version:sandbox");
+    expect(ciphertext).not.toContain("synthetic-secret");
+    expect(encryptPlaidSecret("synthetic-secret", "a:version:sandbox")).not.toBe(ciphertext);
+    expect(decryptPlaidSecret(ciphertext, "a:version:sandbox")).toBe("synthetic-secret");
+    for (const binding of ["b:version:sandbox", "a:replaced:sandbox", "a:version:production"]) {
+      expect(() => decryptPlaidSecret(ciphertext, binding)).toThrow("Unable to decrypt");
     }
+    vi.stubEnv("PLAID_CREDENTIAL_ENCRYPTION_KEY", Buffer.alloc(32, 2).toString("base64"));
+    expect(() => decryptPlaidSecret(ciphertext, "a:version:sandbox")).toThrow("Unable to decrypt");
   });
-
-  it("rejects missing credentials", () => {
-    delete process.env.PLAID_SECRET;
-    expect(() => createPlaidClient()).toThrow("Plaid credentials are not configured");
+  it("rejects malformed, truncated and tampered ciphertext without exposing values", () => {
+    vi.stubEnv("PLAID_CREDENTIAL_ENCRYPTION_KEY", Buffer.alloc(32, 1).toString("base64"));
+    const value = encryptPlaidSecret("synthetic-secret", "a");
+    for (const invalid of ["", "v2.a.b.c", value + ".extra", value.slice(0, -4), value.replace("v1.", "v1.!!"), "x".repeat(9000)]) {
+      expect(() => decryptPlaidSecret(invalid, "a")).toThrow("Unable to decrypt saved Plaid credentials");
+    }
+    vi.stubEnv("PLAID_CREDENTIAL_ENCRYPTION_KEY", "invalid");
+    expect(() => encryptPlaidSecret("synthetic-secret", "a")).toThrow("not configured");
   });
-
-  it("uses the configured environment endpoint", () => {
-    const client = createPlaidClient();
-
-    expect(client).toBeDefined();
-    expect(plaidMocks.Configuration).toHaveBeenCalledWith(expect.objectContaining({
-      basePath: "https://sandbox.plaid.com",
-      baseOptions: { headers: { "PLAID-CLIENT-ID": "client-id", "PLAID-SECRET": "client-secret" } },
-    }));
+  it("isolates Sandbox and Production without consulting shared environment credentials", () => {
+    vi.stubEnv("PLAID_CLIENT_ID", "global-must-not-be-used");
+    vi.stubEnv("PLAID_SECRET", "global-must-not-be-used");
+    for (const environment of ["sandbox", "production"] as const) {
+      const client = createPlaidClient({ clientId: "personal-id", secret: "personal-secret", environment });
+      const config = (client as unknown as { configuration: { basePath: string; baseOptions: { headers: Record<string, string> } } }).configuration;
+      expect(config.basePath).toBe(`https://${environment}.plaid.com`);
+      expect(config.baseOptions.headers["PLAID-CLIENT-ID"]).toBe("personal-id");
+    }
+    expect(() => createPlaidClient(undefined as never)).toThrow("Personal Plaid credentials are required");
+    expect(createLinkTokenRequest("a").user.client_user_id).toBe("a");
   });
-
-  it("derives Link identity from the supplied server-authenticated ID", () => {
-    expect(createLinkTokenRequest("user-a")).toEqual({
-      client_name: "Dick-Newport",
-      language: "en",
-      country_codes: ["US"],
-      user: { client_user_id: "user-a" },
-      products: ["transactions"],
-    });
+  it("maps only known errors and never reflects sensitive provider responses", () => {
+    expect(safePlaidError({ response: { data: { error_code: "PRODUCTION_ACCESS_NOT_GRANTED" } } })).toContain("Production");
+    expect(safePlaidError({ response: { data: { error_code: "PRODUCT_NOT_SUPPORTED" } } })).toContain("does not support");
+    expect(safePlaidError({ message: "secret", response: { data: { error_message: "secret", error_code: "secret" } } })).not.toContain("secret");
   });
 });

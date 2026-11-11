@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
+import { plaidDisabledResponse } from "../disabled";
 
-export async function GET() {
-  return NextResponse.json({ error: "Plaid integration is currently disabled." }, { status: 503 });
+export async function GET(request: Request) {
+  return plaidDisabledResponse(request);
 }

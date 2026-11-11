@@ -7,9 +7,10 @@ import { usePlaidLink } from "react-plaid-link";
 type LinkTokenResponse = {
   link_token?: string;
   expiration?: string;
+  credential_session?: string;
 };
 
-export type PlaidLinkToken = { token: string; expiration: string };
+export type PlaidLinkToken = { token: string; expiration: string; credentialSession: string };
 
 const PLAID_EVENT_NAMES = new Set([
   "OPEN",
@@ -55,20 +56,20 @@ export type RefreshResponse = {
   }>;
 };
 
-export async function requestPlaidLinkToken(): Promise<PlaidLinkToken> {
-  const response = await fetch("/api/plaid/create-link-token", { method: "POST" });
+export async function requestPlaidLinkToken(product = "transactions"): Promise<PlaidLinkToken> {
+  const response = await fetch("/api/plaid/create-link-token", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ product }) });
   const data = (await response.json()) as LinkTokenResponse & { error?: string };
-  if (!response.ok || !data.link_token || !data.expiration) {
-    throw new Error("Unable to prepare Plaid connection. Please try again.");
+  if (!response.ok || !data.link_token || !data.expiration || !data.credential_session) {
+    throw new Error(data.error ?? "Unable to prepare Plaid connection. Check personal credentials in Settings.");
   }
-  return { token: data.link_token, expiration: data.expiration };
+  return { token: data.link_token, expiration: data.expiration, credentialSession: data.credential_session };
 }
 
-export async function exchangePlaidPublicToken(publicToken: string): Promise<void> {
+export async function exchangePlaidPublicToken(publicToken: string, credentialSession: string): Promise<void> {
   const response = await fetch("/api/plaid/exchange-token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ public_token: publicToken }),
+    body: JSON.stringify({ public_token: publicToken, credential_session: credentialSession }),
   });
   const data = (await response.json()) as { error?: string };
   if (!response.ok) throw new Error(data.error ?? "Unable to save Plaid connection");
@@ -118,6 +119,8 @@ function refreshSummary(data: RefreshResponse): { message: string; error: boolea
 export default function PlaidConnect() {
   const router = useRouter();
   const [linkToken, setLinkToken] = useState<PlaidLinkToken | null>(null);
+  const [product, setProduct] = useState("transactions");
+  const session = useRef("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -140,11 +143,13 @@ export default function PlaidConnect() {
     setError(null);
     setStatus("Preparing a secure Plaid connection...");
     try {
-      setLinkToken(await requestPlaidLinkToken());
+      const token = await requestPlaidLinkToken(product);
+      session.current = token.credentialSession;
+      setLinkToken(token);
       setStatus("Ready to connect.");
-    } catch {
+    } catch (error) {
       setStatus("Could not prepare a Plaid connection.");
-      setError("Please try again. If the problem continues, contact support.");
+      setError(error instanceof Error ? error.message : "Check your personal credentials in Settings.");
     } finally {
       tokenRequestInFlight.current = false;
       setIsLoading(false);
@@ -164,7 +169,7 @@ export default function PlaidConnect() {
     setError(null);
     setStatus("Saving your secure connection...");
     try {
-      await exchangePlaidPublicToken(publicToken);
+      await exchangePlaidPublicToken(publicToken, session.current);
       setStatus("Connection saved. Refreshing financial data...");
       await refreshAfterExchange();
     } catch {
@@ -223,6 +228,8 @@ export default function PlaidConnect() {
     <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-ink)]">Connected accounts</p>
       <p className="mt-1 text-xs text-[var(--text-muted)]">Plaid connections stay separate from manually entered accounts.</p>
+      <a className="mt-2 block text-xs underline" href="/settings/profile">Manage personal Plaid credentials</a>
+      <label className="mt-2 block text-xs">Connection product <select value={product} disabled={isLoading || !!linkToken} onChange={event => setProduct(event.target.value)}><option value="transactions">Transactions and balances</option><option value="investments">Investments and balances</option></select></label>
       <div className="mt-3 flex flex-wrap gap-2">
         {!linkToken ? (
           <button id="plaid-connect-button" onClick={createLinkToken} disabled={isLoading} className="rounded border border-[var(--border)] px-3 py-2 text-sm font-medium disabled:opacity-50">

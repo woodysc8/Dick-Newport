@@ -13,6 +13,7 @@ vi.mock("../lib/supabase/server", () => ({
   ensureOwnProfile: mocks.ensureOwnProfile,
 }));
 vi.mock("./components/FinancialProfileForm", () => ({ default: () => "financial-profile-form" }));
+vi.mock("./components/PersonalPlaidCredentials", () => ({ default: () => "personal-plaid-credentials" }));
 
 import OnboardingPage from "./onboarding/page";
 import ProfileSettingsPage from "./settings/profile/page";
@@ -84,6 +85,7 @@ describe("profile page loading", () => {
     const page = await ProfileSettingsPage({ searchParams: Promise.resolve({}) });
 
     expect(renderedText(page)).toContain("financial-profile-form");
+    expect(renderedText(page)).toContain("personal-plaid-credentials");
   });
 
   it("renders the starter settings form when no profile exists", async () => {
