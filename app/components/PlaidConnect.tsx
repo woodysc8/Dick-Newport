@@ -145,7 +145,10 @@ export default function PlaidConnect() {
     const summary = refreshSummary(data);
     setStatus(`${savedConnection.current ? "Connection saved. " : ""}${summary.message}`);
     setError(summary.error ? summary.message : null);
-    if (data.status === "completed") router.refresh();
+    if (data.status === "completed") {
+      window.dispatchEvent(new Event("financial-data-refreshed"));
+      router.refresh();
+    }
   }, [router]);
 
   const createLinkToken = async () => {

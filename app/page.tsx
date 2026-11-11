@@ -14,6 +14,8 @@ import { normalizeFinancialProfile } from "../lib/financialProfileNormalization"
 import { createSupabaseServerClient, ensureOwnProfile } from "../lib/supabase/server";
 import PlaidConnect, { PlaidConnectShortcut } from "./components/PlaidConnect";
 import FinanceNav from "./components/FinanceNav";
+import WeeklyBudget from "./components/WeeklyBudget";
+import TransactionsWorkspace from "./components/TransactionsWorkspace";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -328,6 +330,8 @@ export default async function Home() {
           <div className="flex flex-wrap items-center justify-end gap-3"><PlaidConnect /><a href="/settings/profile" className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Profile</a><form action={signOut}><button className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
         </header>
         <div className="mt-5 overflow-x-auto"><FinanceNav active="Overview" /></div>
+        <WeeklyBudget />
+        <TransactionsWorkspace preview />
 
         {legacyExampleMode && <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Development example data is active.</p>}
 

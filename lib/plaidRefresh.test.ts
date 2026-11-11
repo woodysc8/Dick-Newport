@@ -179,6 +179,48 @@ async function context(userId: string, items: Row[], plaidClient: Record<string,
 }
 
 describe("tenant-safe financial refresh", () => {
+  it.each([false,true])("retains the original transaction source on duplicate Item identities, including insert races (%s)", async race => {
+    state.items.push({user_id:"user-a",plaid_item_id:"item-a",access_token:"synthetic",transactions_cursor:"initial",credential_id:"credential-a",connection_status:"active",products:["transactions"]});
+    state.accounts.push({id:"new-account",user_id:"user-a",plaid_item_id:"item-a",plaid_account_id:"account-a"},{id:"original-account",user_id:"user-a",plaid_item_id:"item-original",plaid_account_id:"original"});
+    state.transactions.push({id:"original-row",user_id:"user-a",account_id:"original-account",plaid_transaction_id:"same-txn",category_override:"coffee"});
+    state.forceTransactionRace=race;
+    const client={accountsGet:vi.fn().mockResolvedValue({data:{accounts:[]}}),transactionsSync:vi.fn().mockResolvedValue({data:{added:[{transaction_id:"same-txn",account_id:"account-a",date:"2026-11-11",name:"Repeated",amount:10}],modified:[],removed:[],next_cursor:"terminal",has_more:false}}),investmentsHoldingsGet:vi.fn()};
+    const {refreshFinancialData}=await import("./plaidRefresh");
+    const result=await refreshFinancialData(await context("user-a",state.items,client));
+    expect(result.success).toBe(true);expect(result.items[0].warnings.length).toBeGreaterThan(0);
+    expect(state.transactions).toHaveLength(1);expect(state.transactions[0]).toMatchObject({account_id:"original-account",category_override:"coffee"});
+  });
+  it("does not remove another saved Item's transaction when provider identities collide", async () => {
+    state.items.push({user_id:"user-a",plaid_item_id:"item-a",access_token:"synthetic",transactions_cursor:"initial",credential_id:"credential-a",connection_status:"active",products:["transactions"]});
+    state.accounts.push({id:"other-account",user_id:"user-a",plaid_item_id:"item-other",plaid_account_id:"account-other"});
+    state.transactions.push({id:"other-row",user_id:"user-a",account_id:"other-account",plaid_transaction_id:"other-txn"});
+    const client={accountsGet:vi.fn().mockResolvedValue({data:{accounts:[]}}),transactionsSync:vi.fn().mockResolvedValue({data:{added:[],modified:[],removed:[{transaction_id:"other-txn"}],next_cursor:"terminal",has_more:false}}),investmentsHoldingsGet:vi.fn()};
+    const {refreshFinancialData}=await import("./plaidRefresh");
+    expect((await refreshFinancialData(await context("user-a",state.items,client))).success).toBe(true);
+    expect(state.transactions).toHaveLength(1);expect(state.transactions[0].id).toBe("other-row");
+  });
+  it("preserves manual decisions and account source selection while updating provider metadata", async () => {
+    state.items.push({user_id:"user-a",plaid_item_id:"item-a",access_token:"synthetic",transactions_cursor:null,credential_id:"credential-a",connection_status:"active",products:["transactions"]});
+    state.accounts.push({id:"account-row",user_id:"user-a",plaid_item_id:"item-a",plaid_account_id:"account-a",weekly_budget_source:"include"});
+    state.transactions.push({id:"row",user_id:"user-a",plaid_transaction_id:"txn",account_id:"account-row",category_override:"coffee",weekly_budget_override:"exclude",category:"Historical legacy category"});
+    const client={accountsGet:vi.fn().mockResolvedValue({data:{accounts:[{account_id:"account-a",name:"Checking",balances:{current:10}}]}}),transactionsSync:vi.fn().mockResolvedValue({data:{added:[],modified:[{transaction_id:"txn",account_id:"account-a",date:"2026-11-11",name:"Updated",amount:20,iso_currency_code:"USD",personal_finance_category:{primary:"TRANSFER_OUT",detailed:"TRANSFER_OUT_ACCOUNT_TRANSFER",confidence_level:"HIGH"}}],removed:[],next_cursor:"terminal",has_more:false}}),investmentsHoldingsGet:vi.fn()};
+    const {refreshFinancialData}=await import("./plaidRefresh");
+    expect((await refreshFinancialData(await context("user-a",state.items,client))).success).toBe(true);
+    expect(state.transactions[0]).toMatchObject({category_override:"coffee",weekly_budget_override:"exclude",normalized_category:"transfer",plaid_primary_category:"TRANSFER_OUT",transaction_currency:"USD",category:"Historical legacy category"});
+    expect(state.accounts[0].weekly_budget_source).toBe("include");
+  });
+
+  it("retains pending preferences and the original cursor when posted persistence fails", async () => {
+    state.items.push({user_id:"user-a",plaid_item_id:"item-a",access_token:"synthetic",transactions_cursor:"initial",credential_id:"credential-a",connection_status:"active",products:["transactions"]});
+    state.accounts.push({id:"account-row",user_id:"user-a",plaid_item_id:"item-a",plaid_account_id:"account-a"});
+    state.transactions.push({id:"pending",user_id:"user-a",account_id:"account-row",plaid_transaction_id:"pending",pending:true,category_override:"coffee"},{id:"posted",user_id:"user-a",account_id:"account-row",plaid_transaction_id:"posted"});
+    state.failRecoveryUpdate=true;
+    const client={accountsGet:vi.fn().mockResolvedValue({data:{accounts:[]}}),transactionsSync:vi.fn().mockResolvedValue({data:{added:[{transaction_id:"posted",pending_transaction_id:"pending",account_id:"account-a",date:"2026-11-11",name:"Posted",amount:10}],modified:[],removed:[],next_cursor:"terminal",has_more:false}}),investmentsHoldingsGet:vi.fn()};
+    const {refreshFinancialData}=await import("./plaidRefresh");
+    expect((await refreshFinancialData(await context("user-a",state.items,client))).success).toBe(false);
+    expect(state.transactions.find(t=>t.id==="pending")?.category_override).toBe("coffee");
+    expect(state.items[0].transactions_cursor).toBe("initial");
+  });
   it("blocks legacy, revoked, and unrelated credential versions before any provider request", async () => {
     const { refreshFinancialData } = await import("./plaidRefresh");
     for (const [credentialId, status] of [[null, "reconnect_required"], ["old-version", "active"], ["credential-a", "revoked"]]) {
@@ -336,7 +378,7 @@ describe("tenant-safe financial refresh", () => {
     expect(state.items[1].transactions_cursor).toBeNull();
   });
 
-  it("progresses through multiple transaction pages and persists each cursor", async () => {
+  it("progresses through multiple transaction pages and persists only the terminal cursor", async () => {
     state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Bank A", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     const plaidClient = {
       accountsGet: vi.fn().mockResolvedValue({ data: { accounts: [] } }),
@@ -348,8 +390,8 @@ describe("tenant-safe financial refresh", () => {
     const { refreshFinancialData } = await import("./plaidRefresh");
     await refreshFinancialData(await context("user-a", state.items, plaidClient));
 
-    expect(plaidClient.transactionsSync).toHaveBeenNthCalledWith(1, { access_token: "token-a", cursor: "" });
-    expect(plaidClient.transactionsSync).toHaveBeenNthCalledWith(2, { access_token: "token-a", cursor: "cursor-1" });
+    expect(plaidClient.transactionsSync).toHaveBeenNthCalledWith(1, expect.objectContaining({ access_token: "token-a", cursor: "", count: 500 }));
+    expect(plaidClient.transactionsSync).toHaveBeenNthCalledWith(2, expect.objectContaining({ access_token: "token-a", cursor: "cursor-1" }));
     expect(state.items[0].transactions_cursor).toBe("cursor-2");
   });
 

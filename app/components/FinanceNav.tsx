@@ -3,6 +3,7 @@ import Link from "next/link";
 const links = [
   ["Overview", "/"],
   ["Accounts", "/accounts"],
+  ["Transactions", "/transactions"],
   ["Budget", "/budget"],
   ["Paychecks", "/paychecks"],
   ["Debt", "/debt"],

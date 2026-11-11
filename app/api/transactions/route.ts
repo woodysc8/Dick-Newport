@@ -1,0 +1,55 @@
+import { isBudgetCategory } from "../../../lib/discretionaryBudget";
+import {
+  listAccounts,
+  listTransactions,
+  TransactionInputError,
+  uuid,
+} from "../../../lib/transactionData";
+import { transactionRoute } from "../../../lib/transactionRoute";
+
+export function GET(request: Request) {
+  return transactionRoute(request, async ({ supabase, user }) => ({
+    ...(await listTransactions(
+      supabase,
+      user.id,
+      new URL(request.url).searchParams,
+    )),
+    accounts: await listAccounts(supabase, user.id),
+  }));
+}
+export function PATCH(request: Request) {
+  return transactionRoute(request, async ({ supabase, user }, body) => {
+    if (
+      Object.keys(body).some(
+        (k) =>
+          !["id", "category_override", "weekly_budget_override"].includes(k),
+      ) ||
+      !uuid(body.id) ||
+      !("category_override" in body || "weekly_budget_override" in body) ||
+      ("category_override" in body &&
+        body.category_override !== null &&
+        !isBudgetCategory(body.category_override)) ||
+      ("weekly_budget_override" in body &&
+        body.weekly_budget_override !== null &&
+        (typeof body.weekly_budget_override !== "string" ||
+          !["include", "exclude"].includes(body.weekly_budget_override)))
+    )
+      throw new TransactionInputError("Invalid transaction correction");
+    const changes = Object.fromEntries(
+      Object.entries(body).filter(([key]) => key !== "id"),
+    );
+    const { data, error } = await supabase
+      .from("transactions")
+      .update(changes)
+      .eq("user_id", user.id)
+      .eq("id", body.id)
+      .select("id")
+      .maybeSingle();
+    if (error) throw new Error();
+    if (!data)
+      throw new TransactionInputError(
+        "Transaction not found for this user. Refresh the list; it may have posted or been removed.",
+      );
+    return { saved: true };
+  });
+}

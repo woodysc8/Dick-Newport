@@ -1,0 +1,21 @@
+# Transactions and weekly-budget integration review
+
+Scope: existing Dick-Newport per-user credentials and saved Items; stored transaction browsing and weekly budgeting. User confirmed the guided workflow, existing authentication only, and existing transactions/investments/liabilities data scope. No new verification, money movement, products, paid add-ons, live calls or connection lifecycle changes are authorized by this task.
+
+Decisions made:
+- Keep current Link product configuration and per-user encryption architecture. Shared environment credentials, new product consent and reconnecting Items are rejected as unnecessary and contrary to scope. GUIDE-001/002/003/004/006 apply through the existing per-user server credential store; no global CLI credential setup is appropriate.
+- Use the existing authenticated server and transaction table; new user-scoped APIs expose only safe financial fields. GUIDE-003, DATA-001.
+- Preserve modern PFC primary/detailed/confidence separately, pin v2 on existing sync calls, auto-classify only HIGH/VERY_HIGH. TXN-005/006/013.
+- Buffer a bounded complete update and restart from the original Item cursor on pagination mutation. Save only the terminal cursor after persistence; use idempotent replay on persistence failure. TXN-002/004/007/011. Atomic data-plus-cursor persistence remains a documented limitation.
+- Preserve explicit pending-to-posted user decisions with an owner/account-bound insert trigger, process all additions/modifications before removals, and retain owner/provider identities. TXN-004.
+- Prefer persistent account identity; require explicit source review when identity is unavailable. Never fuzzy-delete matching purchases. TXN-012.
+- No automatic freshness polling or new webhook receiver is introduced. Reads use already-synced data. User-triggered saved-connection refresh stays the existing path; no separately billed transactions/refresh calls. TXN-008/010, GUIDE-016.
+
+Verified human tasks / deployment gates:
+- Remote migration history inspected read-only: the credential migration timestamp differs locally/remotely. Administrator review is required before any history reconciliation; none performed.
+- New additive migration tested on disposable PostgreSQL; remote deployment pending explicit approval.
+- No new Dashboard configuration is needed for stored-data browsing. Existing account-level production access and institution availability are not revalidated without live-call authorization.
+- Live Sandbox/Production Link→exchange→sync smoke tests are not run; the user prohibited unnecessary live calls. Existing update-mode/webhook/OAuth production validation gaps are unchanged and outside this repair.
+- After approved migration deployment, choose exactly one weekly budget source per underlying account, configure the limit, and authorize a saved-connection refresh only if imports are missing.
+
+Acceptance evidence: unit/API/UI tests and disposable RLS/migration tests; TypeScript, ESLint and production build; unauthenticated HTTP smoke checks. Final evidence and unresolved deployment gates are recorded in docs/transactions-weekly-budget.md and the delivery report. This plan does not claim live Plaid acceptance.

@@ -2,6 +2,8 @@ import type { PlaidApi } from "plaid";
 import { decryptPlaidSecret } from "./plaidEncryption";
 import { calculateSecuritiesOnlyValue } from "./investmentSnapshots";
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
+import { normalizePlaidCategory } from "./discretionaryBudget";
+import { collectTransactionSync } from "./transactionSyncBatch";
 
 const plaidRefreshContextBrand = Symbol("PlaidRefreshContext");
 
@@ -135,6 +137,7 @@ async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, r
       user_id: context.userId,
       plaid_item_id: item.plaid_item_id,
       plaid_account_id: account.account_id,
+      ...(account.persistent_account_id ? { persistent_account_id: account.persistent_account_id } : {}),
       institution_name: item.institution_name ?? "Unknown Institution",
       account_name: account.name ?? account.official_name ?? "",
       account_type: account.type ?? null,
@@ -211,6 +214,9 @@ type PlaidTransaction = {
   amount: number;
   category?: string[] | string | null;
   pending?: boolean;
+  iso_currency_code?: string | null;
+  unofficial_currency_code?: string | null;
+  personal_finance_category?: { primary: string; detailed: string; confidence_level?: string | null } | null;
 };
 
 async function removeLinkedPendingTransaction(
@@ -242,10 +248,10 @@ async function persistTransaction(
 ) {
   if (!transaction.transaction_id) throw new Error("Plaid transaction is missing its identity");
   const accountId = await localAccountId(context, item, transaction.account_id);
-  const reconciledPendingCount = transaction.pending
-    ? 0
-    : await removeLinkedPendingTransaction(context, accountId, transaction.pending_transaction_id);
-  result.transactions_removed += reconciledPendingCount;
+  if (transaction.account_id && !accountId) throw new Error("Transaction account has not been imported safely");
+  const reconcile = async () => {
+    if (!transaction.pending) result.transactions_removed += await removeLinkedPendingTransaction(context, accountId, transaction.pending_transaction_id);
+  };
   const payload = {
     user_id: context.userId,
     account_id: accountId,
@@ -254,22 +260,35 @@ async function persistTransaction(
     name: transaction.name,
     merchant_name: transaction.merchant_name ?? null,
     amount: transaction.amount,
-    category: Array.isArray(transaction.category) ? transaction.category.join(" > ") : transaction.category ?? null,
+    ...(transaction.category !== undefined ? { category: Array.isArray(transaction.category) ? transaction.category.join(" > ") : transaction.category } : {}),
     pending: Boolean(transaction.pending),
+    pending_transaction_id: transaction.pending_transaction_id ?? null,
+    transaction_currency: transaction.iso_currency_code ?? transaction.unofficial_currency_code ?? null,
+    plaid_primary_category: transaction.personal_finance_category?.primary ?? null,
+    plaid_detailed_category: transaction.personal_finance_category?.detailed ?? null,
+    plaid_category_confidence: transaction.personal_finance_category?.confidence_level ?? null,
+    normalized_category: normalizePlaidCategory(transaction.personal_finance_category?.primary, transaction.personal_finance_category?.detailed, transaction.personal_finance_category?.confidence_level),
     updated_at: new Date().toISOString(),
   };
   const { data: existing, error: lookupError } = await context.supabase
     .from("transactions")
-    .select("id")
+    .select("id, account_id")
     .eq("user_id", context.userId)
     .eq("plaid_transaction_id", transaction.transaction_id)
     .maybeSingle();
   if (lookupError) throw new Error(`Transaction lookup failed: request failed`);
 
   if (existing) {
+    if (existing.account_id && accountId && existing.account_id !== accountId) {
+      const { data: sameItem, error } = await context.supabase.from("accounts").select("id")
+        .eq("id", existing.account_id).eq("user_id", context.userId).eq("plaid_item_id", item.plaid_item_id).maybeSingle();
+      if (error) throw new Error("Transaction source ownership check failed");
+      if (!sameItem) { result.warnings.push("A repeated transaction identity from another connection was retained at its original source."); return; }
+    }
     const { error } = await context.supabase.from("transactions").update(payload).eq("id", existing.id).eq("user_id", context.userId);
     if (error) throw new Error(`Transaction update failed: request failed`);
     result.transactions_modified += 1;
+    await reconcile();
     return;
   }
 
@@ -277,17 +296,24 @@ async function persistTransaction(
   if (!insertError) {
     if (mode === "modified") result.transactions_modified += 1;
     else result.transactions_added += 1;
+    await reconcile();
     return;
   }
   if (!isUniqueViolation(insertError)) throw new Error(`Transaction insert failed: request failed`);
 
   const { data: raced, error: racedLookupError } = await context.supabase
     .from("transactions")
-    .select("id")
+    .select("id, account_id")
     .eq("user_id", context.userId)
     .eq("plaid_transaction_id", transaction.transaction_id)
     .maybeSingle();
   if (racedLookupError || !raced) throw new Error(`Transaction conflict recovery failed: transaction not found`);
+  if (raced.account_id && accountId && raced.account_id !== accountId) {
+    const { data: sameItem, error } = await context.supabase.from("accounts").select("id")
+      .eq("id", raced.account_id).eq("user_id", context.userId).eq("plaid_item_id", item.plaid_item_id).maybeSingle();
+    if (error) throw new Error("Transaction source conflict check failed");
+    if (!sameItem) { result.warnings.push("A repeated transaction identity from another connection was retained at its original source."); return; }
+  }
   const { error: recoveryError } = await context.supabase
     .from("transactions")
     .update(payload)
@@ -296,41 +322,41 @@ async function persistTransaction(
     .eq("plaid_transaction_id", transaction.transaction_id);
   if (recoveryError) throw new Error(`Transaction conflict recovery failed: request failed`);
   result.transactions_modified += 1;
+  await reconcile();
 }
 
 async function refreshTransactions(context: PlaidRefreshContext, item: StoredItem, result: ItemRefreshResult) {
-  let cursor = item.transactions_cursor ?? "";
-  let hasMore = true;
-  while (hasMore) {
-    let response;
-    try {
-      response = await context.plaidClient.transactionsSync({ access_token: item.access_token, cursor });
-    } catch (error) {
-      throw new Error(formattedPlaidError("transactionsSync", error));
-    }
-    for (const transaction of response.data.added ?? []) await persistTransaction(context, item, transaction, result, "added");
-    for (const transaction of response.data.modified ?? []) await persistTransaction(context, item, transaction, result, "modified");
-    for (const removed of response.data.removed ?? []) {
-      if (!removed.transaction_id) continue;
-      const { data: deleted, error } = await context.supabase
-        .from("transactions")
-        .delete()
-        .eq("user_id", context.userId)
-        .eq("plaid_transaction_id", removed.transaction_id)
-        .select("id");
-      if (error) throw new Error(`Transaction delete failed: request failed`);
-      result.transactions_removed += deleted?.length ?? 0;
-    }
-    const nextCursor = response.data.next_cursor;
-    const { error: cursorError } = await context.supabase
-      .from("plaid_items")
-      .update({ transactions_cursor: nextCursor, updated_at: new Date().toISOString() })
+  const batch = await collectTransactionSync(context.plaidClient, item.access_token, item.transactions_cursor ?? "");
+  for (const transaction of batch.added) await persistTransaction(context, item, transaction, result, "added");
+  for (const transaction of batch.modified) await persistTransaction(context, item, transaction, result, "modified");
+  for (const removed of batch.removed) {
+    if (!removed.transaction_id) continue;
+    const { data: stored, error: storedError } = await context.supabase.from("transactions")
+      .select("id, account_id").eq("user_id", context.userId).eq("plaid_transaction_id", removed.transaction_id).maybeSingle();
+    if (storedError) throw new Error("Removed transaction lookup failed");
+    if (!stored) continue;
+    if (!stored.account_id) throw new Error("Removed transaction account cannot be verified");
+    const { data: ownerAccount, error: ownerError } = await context.supabase.from("accounts")
+      .select("id").eq("user_id", context.userId).eq("id", stored.account_id).eq("plaid_item_id", item.plaid_item_id).maybeSingle();
+    if (ownerError) throw new Error("Removed transaction ownership check failed");
+    if (!ownerAccount) continue;
+    const { data: deleted, error } = await context.supabase
+      .from("transactions")
+      .delete()
       .eq("user_id", context.userId)
-      .eq("plaid_item_id", item.plaid_item_id);
-    if (cursorError) throw new Error(`Transaction cursor persistence failed: request failed`);
-    cursor = nextCursor;
-    hasMore = response.data.has_more;
+      .eq("plaid_transaction_id", removed.transaction_id)
+      .eq("account_id", stored.account_id)
+      .select("id");
+    if (error) throw new Error(`Transaction delete failed: request failed`);
+    result.transactions_removed += deleted?.length ?? 0;
   }
+  const nextCursor = batch.cursor;
+  const { error: cursorError } = await context.supabase
+    .from("plaid_items")
+    .update({ transactions_cursor: nextCursor, updated_at: new Date().toISOString() })
+    .eq("user_id", context.userId)
+    .eq("plaid_item_id", item.plaid_item_id);
+  if (cursorError) throw new Error(`Transaction cursor persistence failed: request failed`);
 }
 
 async function refreshHoldings(context: PlaidRefreshContext, item: StoredItem, result: ItemRefreshResult) {
