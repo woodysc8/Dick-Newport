@@ -57,7 +57,7 @@ export default function TransactionReview() {
     >
       <h2 className="font-semibold">Classification review and dry run</h2>
       <p className="mt-2 text-sm">
-        Preview automatic classifications without changing records. Corrections
+        This limited-period dry run compares the current automatic classifier, without legacy suggestions. Previewing changes no records. Corrections
         apply only to explicitly selected transactions, never to an inferred
         merchant-wide rule.
       </p>

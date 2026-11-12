@@ -49,6 +49,7 @@ export type BudgetAccount = {
   persistent_account_id: string | null;
   weekly_budget_source: "review" | "include" | "exclude";
   created_at: string;
+  account_type?: string | null;
 };
 export type BudgetTransaction = {
   id: string;

@@ -3,6 +3,7 @@ import { getAuthenticatedSupabaseContext } from "../../lib/supabase/server";
 import { Shell } from "../components/FinancePage";
 import TransactionsWorkspace from "../components/TransactionsWorkspace";
 import TransactionReview from "../components/TransactionReview";
+import SuggestedClassifications from "../components/SuggestedClassifications";
 export default async function TransactionsPage({
   searchParams,
 }: {
@@ -24,6 +25,7 @@ export default async function TransactionsPage({
       title="Transactions"
       description="Review imported activity, correct categories, and understand weekly spending."
     >
+      <SuggestedClassifications />
       <TransactionReview />
       <TransactionsWorkspace
         key={params.toString()}

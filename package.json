@@ -9,8 +9,8 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "test:fast": "vitest run lib/dashboard.test.ts lib/dashboardViewModel.test.ts lib/transactionData.test.ts lib/discretionaryBudget.test.ts lib/financialBriefing.test.ts lib/financialAutomation.test.ts app/components/TransactionsBudget.test.tsx app/components/FinancialEngine.ui.test.tsx",
-    "test:financial": "vitest run lib/budgetEngine.test.ts lib/discretionaryBudget.test.ts lib/accounting.test.ts lib/transactionData.test.ts lib/financialBriefing.test.ts lib/financialAutomation.test.ts lib/financialContext.test.ts lib/requestSecurity.test.ts app/api/transactions/weeklyRoutes.test.ts app/api/budget-engine/engineRoutes.test.ts app/api/cron/financial/route.test.ts",
+    "test:fast": "vitest run lib/transactionClassification.test.ts lib/transactionSuggestions.test.ts app/components/SuggestedClassifications.test.tsx lib/dashboard.test.ts lib/dashboardViewModel.test.ts lib/transactionData.test.ts lib/discretionaryBudget.test.ts lib/financialBriefing.test.ts lib/financialAutomation.test.ts app/components/TransactionsBudget.test.tsx app/components/FinancialEngine.ui.test.tsx",
+    "test:financial": "vitest run lib/transactionClassification.test.ts lib/transactionSuggestions.test.ts lib/budgetEngine.test.ts lib/discretionaryBudget.test.ts lib/accounting.test.ts lib/transactionData.test.ts lib/financialBriefing.test.ts lib/financialAutomation.test.ts lib/financialContext.test.ts lib/requestSecurity.test.ts app/api/transactions/weeklyRoutes.test.ts app/api/budget-engine/engineRoutes.test.ts app/api/cron/financial/route.test.ts",
     "test:all": "vitest run",
     "test:rls": "vitest run lib/supabase/rls.integration.test.ts"
   },

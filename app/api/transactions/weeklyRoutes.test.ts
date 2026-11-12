@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   accounts: vi.fn(),
   weekly: vi.fn(),
   policy: vi.fn(),
+  suggestions: vi.fn(),
 }));
 vi.mock("../../../lib/supabase/server", () => ({
   getAuthenticatedSupabaseContext: mocks.auth,
@@ -16,6 +17,7 @@ vi.mock("../../../lib/transactionData", async (original) => ({
   listTransactions: mocks.list,
   listAccounts: mocks.accounts,
   loadWeeklyBudget: mocks.weekly,
+  listTransactionSuggestions: mocks.suggestions,
 }));
 vi.mock("../../../lib/financialBudgetData", () => ({ loadBudgetPolicy: mocks.policy }));
 import { GET, PATCH } from "./route";
@@ -52,6 +54,25 @@ beforeEach(() => {
   mocks.accounts.mockResolvedValue([]);
   mocks.weekly.mockResolvedValue({});
   mocks.policy.mockResolvedValue({ categories: [], accounts: [], monthly_limit: null });
+  mocks.suggestions.mockResolvedValue({ suggestions: [], summary: { total: 0 }, page: 1, hasMore: false });
+});
+it("authenticates the suggestion preview and ignores forged owner identifiers without any writes", async () => {
+  const req = () => new Request("http://localhost/api/transactions?view=suggestions&user_id=other");
+  mocks.auth.mockResolvedValueOnce(null);
+  expect((await GET(req())).status).toBe(401);
+  expect(mocks.suggestions).not.toHaveBeenCalled();
+  expect((await GET(req())).status).toBe(200);
+  expect(mocks.suggestions).toHaveBeenCalledWith(client, "owner", expect.any(URLSearchParams), [], { categories: [], accounts: [], monthly_limit: null });
+  expect(mocks.list).not.toHaveBeenCalled();
+  expect(mocks.profile).not.toHaveBeenCalled();
+  expect(chain.update).not.toHaveBeenCalled();
+  expect(chain.upsert).not.toHaveBeenCalled();
+});
+it("does not convert preview storage errors into empty successful suggestions", async () => {
+  mocks.suggestions.mockRejectedValueOnce(new Error("private DB error"));
+  const response = await GET(new Request("http://localhost/api/transactions?view=suggestions"));
+  expect(response.status).toBe(503);
+  expect(await response.text()).not.toContain("private DB error");
 });
 it("authenticates every read and write without a service role", async () => {
   mocks.auth.mockResolvedValue(null);

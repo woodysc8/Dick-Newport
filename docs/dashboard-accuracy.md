@@ -11,6 +11,6 @@ No live records or connections were inspected or changed. Reported dollar amount
 
 ## Activation and validation
 
-The pending migration still requires approval. The existing local/remote migration timestamp mismatch has not been repaired; compare history before any separately authorized migration work. No schema change is introduced here. Existing private Google Docs authorization and scheduler opt-ins still apply; publication and scheduling remain separate authorized actions.
+The subsequent user-provided audit reports this migration is applied remotely as `20261112161751`, while the local filename remains `20261112020000_budget_briefing_jobs.sql`. That mismatch has not been repaired or independently queried; compare history before any separately authorized migration work. No schema change is introduced here. Existing private Google Docs authorization and scheduler opt-ins still apply; publication and scheduling remain separate authorized actions.
 
 Use the tiers in `AGENTS.md`. `test:fast` covers the dashboard/briefing subset; `test:financial` covers shared money calculations and authorization with fixtures; `test:all` retains the full existing suite. Database migration tests and live RLS tests are intentionally outside the default tiers. No tests were removed. No slow-test removal is proposed without timing evidence.

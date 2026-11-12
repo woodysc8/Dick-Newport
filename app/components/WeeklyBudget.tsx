@@ -221,6 +221,7 @@ export default function WeeklyBudget({
               <p className="mt-1 text-3xl font-semibold">{dollars(m.limit)}</p>
             </div>
           </div>
+          <p className="mt-2 text-sm">Confirmed classified spending is a subtotal, not total actual spending. Unreviewed exposure: {dollars(m.review)}. Only verified coverage, classification and freshness can support a safe-to-spend amount.</p>
           {(m.provisional || !data?.freshness?.lastSyncAt || m.reviewCount > 0 || m.currencyCount > 0) && (
             <p className="mt-3 text-sm" role="status">
               Confirmed subtotal allowance: {dollars(m.remaining)}. After known

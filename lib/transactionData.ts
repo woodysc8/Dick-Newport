@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { financialBudget } from "./budgetEngine";
+import { budgetDecision, financialBudget, type BudgetPolicy } from "./budgetEngine";
+import { suggestTransactionClassification, suggestionConfidences, type SuggestionConfidence } from "./transactionClassification";
 import {
   isBudgetCategory,
   weeklyMetrics,
@@ -11,7 +12,7 @@ import {
 export const transactionColumns =
   "id, account_id, plaid_transaction_id, date, name, merchant_name, amount, pending, category, normalized_category, category_override, weekly_budget_override, monthly_budget_override, transaction_currency, pending_transaction_id, plaid_primary_category, plaid_detailed_category, plaid_category_confidence";
 export const accountColumns =
-  "id, account_name, institution_name, currency, persistent_account_id, weekly_budget_source, created_at";
+  "id, account_name, institution_name, currency, persistent_account_id, weekly_budget_source, created_at, account_type";
 export const uuid = (value: unknown): value is string =>
   typeof value === "string" &&
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
@@ -104,6 +105,83 @@ export async function listTransactions(
     page: f.page,
   };
 }
+export async function listTransactionSuggestions(
+  client: SupabaseClient,
+  userId: string,
+  params: URLSearchParams,
+  accounts: BudgetAccount[],
+  policy: BudgetPolicy,
+) {
+  const f = transactionFilters(params);
+  const confidence = params.get("suggestion_confidence"),
+    category = params.get("proposed_category"),
+    review = params.get("review_status");
+  if ((confidence && !suggestionConfidences.includes(confidence as SuggestionConfidence)) ||
+      (category && !isBudgetCategory(category)) ||
+      (review && !["reviewed", "unreviewed"].includes(review)))
+    throw new TransactionInputError("Invalid suggestion filters");
+  // Derived suggestions cannot be filtered by SQL without a schema change.
+  // Scan only on the server, bounded at 10,000 rows, and return one 50-row page.
+  const transactions: BudgetTransaction[] = [];
+  let expectedCount: number | null = null;
+  for (let offset = 0; offset <= 10000; offset += 500) {
+    let query = client.from("transactions").select(transactionColumns, { count: "exact" }).eq("user_id", userId);
+    if (f.account) query = query.eq("account_id", f.account);
+    const { data, error, count } = await query.order("date", { ascending: false }).order("id", { ascending: false })
+      .range(offset, Math.min(offset + 499, 10000));
+    if (error || !Array.isArray(data)) throw new Error("Suggestion data unavailable");
+    if (count == null || (expectedCount != null && count !== expectedCount))
+      throw new Error("Suggestion coverage changed or is unavailable; retry");
+    if (count > 10000) throw new TransactionAvailabilityError("VOLUME_LIMIT");
+    expectedCount = count;
+    transactions.push(...data as BudgetTransaction[]);
+    if (transactions.length > 10000) throw new TransactionAvailabilityError("VOLUME_LIMIT");
+    if (data.length < 500) break;
+  }
+  if (transactions.length !== expectedCount || new Set(transactions.map((t) => t.id)).size !== transactions.length)
+    throw new Error("Suggestion coverage incomplete or changed; retry");
+  const summary = { total: transactions.length, alreadyReviewed: 0, high: 0, medium: 0, ambiguous: 0, missingProviderMetadata: 0 };
+  const postedLinks = new Set(transactions.filter((t) => t.pending === false && t.pending_transaction_id)
+    .map((t) => `${t.account_id}:${t.pending_transaction_id}`));
+  const seen = new Set<string>();
+  const candidates = transactions.map((t) => {
+    const account = accounts.find((a) => a.id === t.account_id);
+    const suggestion = suggestTransactionClassification(t, account?.account_type);
+    const reviewed = t.category_override != null;
+    if (reviewed) summary.alreadyReviewed++;
+    else if (suggestion.confidence === "high") summary.high++;
+    else if (suggestion.confidence === "medium") summary.medium++;
+    else summary.ambiguous++;
+    if (!t.plaid_primary_category || !t.plaid_detailed_category || !t.plaid_category_confidence)
+      summary.missingProviderMetadata++;
+    const identity = t.plaid_transaction_id ? `plaid:${t.plaid_transaction_id}` : `row:${t.id}`;
+    const replaced = t.pending === true && postedLinks.has(`${t.account_id}:${t.plaid_transaction_id}`);
+    const duplicate = seen.has(identity);
+    seen.add(identity);
+    const impact = (period: "weekly" | "monthly") => {
+      if (replaced || duplicate) return { kind: "exclude", reason: "Pending replacement or repeated provider transaction; not an additional expense." };
+      if (suggestion.category === "needs_review") return { kind: "review", reason: "No supported category proposed; spending effect remains unverified." };
+      const decision = budgetDecision({ ...t, category_override: suggestion.category }, accounts, policy, period);
+      return { kind: decision.kind, reason: `${decision.reason}${Number(t.amount) < 0 ? " Hypothetical credit offset requires explicit approval; no refund is automatically matched." : ""}` };
+    };
+    return {
+      transaction: { id: t.id, account_id: t.account_id, date: t.date, merchant_name: t.merchant_name, name: t.name,
+        amount: t.amount, pending: t.pending, category: t.category, normalized_category: t.normalized_category,
+        category_override: t.category_override, transaction_currency: t.transaction_currency },
+      suggestion, reviewed, weekly: impact("weekly"), monthly: impact("monthly"),
+    };
+  });
+  const filtered = candidates.filter((c) => (!confidence || c.suggestion.confidence === confidence) &&
+    (!category || c.suggestion.category === category) && (!review || c.reviewed === (review === "reviewed")));
+  const start = (f.page - 1) * 50;
+  return {
+    suggestions: filtered.slice(start, start + 50), summary, matching: filtered.length,
+    page: f.page, hasMore: filtered.length > start + 50,
+    accounts: accounts.map((a) => ({ id: a.id, account_name: a.account_name, institution_name: a.institution_name, currency: a.currency })),
+  };
+}
+export type TransactionSuggestionsPage = Awaited<ReturnType<typeof listTransactionSuggestions>>;
+
 export async function loadWeeklyBudget(
   client: SupabaseClient,
   userId: string,

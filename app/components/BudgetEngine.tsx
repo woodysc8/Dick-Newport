@@ -132,7 +132,7 @@ export default function BudgetEngine({
           </p>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             <p>
-              Posted: <strong>{usd(data.monthly.posted)}</strong>
+              Confirmed classified posted subtotal: <strong>{usd(data.monthly.posted)}</strong>
             </p>
             <p>
               Pending: <strong>{usd(data.monthly.pending)}</strong>

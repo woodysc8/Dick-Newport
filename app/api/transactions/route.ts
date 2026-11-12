@@ -2,6 +2,7 @@ import { isBudgetCategory } from "../../../lib/discretionaryBudget";
 import {
   listAccounts,
   listTransactions,
+  listTransactionSuggestions,
   TransactionInputError,
   uuid,
 } from "../../../lib/transactionData";
@@ -9,7 +10,15 @@ import { transactionRoute } from "../../../lib/transactionRoute";
 import { loadBudgetPolicy } from "../../../lib/financialBudgetData";
 
 export function GET(request: Request) {
-  return transactionRoute(request, async ({ supabase, user }) => ({
+  return transactionRoute(request, async ({ supabase, user }) => {
+    const params = new URL(request.url).searchParams;
+    if (params.get("view") === "suggestions") {
+      const [accounts, policy] = await Promise.all([
+        listAccounts(supabase, user.id), loadBudgetPolicy(supabase, user.id),
+      ]);
+      return listTransactionSuggestions(supabase, user.id, params, accounts, policy);
+    }
+    return {
     ...(await listTransactions(
       supabase,
       user.id,
@@ -17,7 +26,8 @@ export function GET(request: Request) {
     )),
     accounts: await listAccounts(supabase, user.id),
     policy: await loadBudgetPolicy(supabase, user.id),
-  }));
+    };
+  });
 }
 export function PATCH(request: Request) {
   return transactionRoute(request, async ({ supabase, user }, body) => {

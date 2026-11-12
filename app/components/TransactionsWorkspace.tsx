@@ -24,8 +24,8 @@ type TransactionPage = {
 const transactionStatus = (t: BudgetTransaction) =>
   t.pending == null ? "Status unknown" : t.pending ? "Pending" : "Posted";
 export function transactionAmount(
-  t: BudgetTransaction,
-  accounts: BudgetAccount[],
+  t: Pick<BudgetTransaction, "amount" | "transaction_currency" | "account_id">,
+  accounts: Pick<BudgetAccount, "id" | "currency">[],
 ) {
   const value = Number(t.amount),
     currency =
