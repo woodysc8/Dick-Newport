@@ -33,6 +33,33 @@ it("includes ambiguous Venmo, legacy payments and other unknown posted debits pr
   expect(rows).toEqual(before);
 });
 
+it("excludes corroborated legacy Bilt payments and investment funding with a transparent posted breakdown", () => {
+  const result = summarize([
+    tx("bilt", { category: "Payment > Credit Card", name: "BILT CARD PMT ***********", amount: 150 }),
+    tx("barclays", { category: "Payment > Credit Card", name: "BARCLAYCARD US CREDITCARD", merchant_name: "Barclays", amount: 50 }),
+    tx("broker", { category: "Service > Financial > Stock Brokers", name: "Robinhood", merchant_name: "Robinhood", amount: 500 }),
+    tx("venmo", { category: "Transfer > Third Party > Venmo", name: "Venmo", amount: 40 }),
+    tx("pending-bilt", { category: "Payment > Credit Card", name: "BILT CARD PMT ***********", amount: 10, pending: true }),
+  ]);
+  expect(result.postedPurchases).toBe(40);
+  expect(result.unverifiedDebits).toBe(40);
+  expect(result.movementBreakdown).toEqual({ cardPayments: 200, investmentTransfers: 500, internalTransfers: 0, other: 0 });
+  expect(result.rows.find((r) => r.id === "bilt")!.purposeReason).toContain("legacy");
+});
+
+it("requires corroborating legacy metadata, bank direction and no stronger contradictory evidence", () => {
+  const broker = tx("broker", { category: "Service > Financial > Stock Brokers", name: "Robinhood", merchant_name: "Robinhood" });
+  const bilt = tx("bilt", { category: "Payment > Credit Card", name: "BILT CARD PMT ***********" });
+  expect(summarize([{ ...bilt, category: null }]).unverifiedDebits).toBe(20);
+  expect(summarize([bilt], [{ ...account, account_type: "credit" }]).unverifiedDebits).toBe(20);
+  expect(summarize([{ ...broker, name: "Robinhood monthly fee" }]).unverifiedDebits).toBe(20);
+  expect(summarize([{ ...broker, name: "Robinhood withdrawal" }]).unverifiedDebits).toBe(20);
+  expect(summarize([{ ...broker, amount: -20 }]).postedPurchases).toBe(0);
+  expect(summarize([{ ...bilt, category_override: "shopping" }]).postedPurchases).toBe(20);
+  expect(summarize([{ ...bilt, plaid_primary_category: "FOOD_AND_DRINK", plaid_detailed_category: "FOOD_AND_DRINK_GROCERIES", plaid_category_confidence: "HIGH" }]).confirmedPurchases).toBe(20);
+  expect(summarize([{ ...bilt, plaid_primary_category: "TRANSFER_OUT", plaid_detailed_category: "FOOD_AND_DRINK_GROCERIES", plaid_category_confidence: "HIGH" }]).unverifiedDebits).toBe(20);
+});
+
 it("counts all sources independently of old budget exclusions and includes essential purchases and rent", () => {
   const a2 = { ...account, id: "b", weekly_budget_source: "review" as const };
   const result = summarize([tx("rent", { category_override: "housing", amount: 733, weekly_budget_override: "exclude", monthly_budget_override: "exclude" }), tx("health", { category_override: "healthcare", account_id: "b", amount: 50 })], [account, a2]);

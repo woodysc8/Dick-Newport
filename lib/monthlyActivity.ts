@@ -15,7 +15,31 @@ const verifiedMovementDetails = new Set([
   "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
 ]);
 
-function purpose(t: BudgetTransaction): "purchase" | "movement" | "unverified" {
+type MovementType = "cardPayments" | "investmentTransfers" | "internalTransfers" | "other";
+const movementType = (category: string): MovementType => category === "card_payment" ? "cardPayments" : category === "investment" ? "investmentTransfers" : ["transfer", "savings"].includes(category) ? "internalTransfers" : "other";
+function movementEvidence(t: BudgetTransaction, account?: BudgetAccount): { type: MovementType; reason: string } | null {
+  if (t.category_override != null) return manualMovements.has(t.category_override)
+    ? { type: movementType(t.category_override), reason: "Explicit saved movement category." } : null;
+  if (t.plaid_primary_category && t.plaid_detailed_category && !t.plaid_detailed_category.startsWith(`${t.plaid_primary_category}_`)) return null;
+  const modern = ["HIGH", "VERY_HIGH"].includes(t.plaid_category_confidence ?? "") &&
+    !!t.plaid_primary_category && !!t.plaid_detailed_category && t.plaid_detailed_category.startsWith(`${t.plaid_primary_category}_`);
+  if (modern) return verifiedMovementDetails.has(t.plaid_detailed_category!)
+    ? { type: t.plaid_detailed_category === "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" ? "cardPayments" : t.plaid_detailed_category!.includes("INVESTMENT") ? "investmentTransfers" : "internalTransfers", reason: "Consistent high-confidence modern provider movement metadata." } : null;
+  // Exact legacy path + debit direction + bank account + corroborating provider
+  // description. A broker name alone, fees, and generic payments do not qualify.
+  if (account?.account_type !== "depository" || t.amount == null || !Number.isFinite(Number(t.amount)) || Number(t.amount) <= 0) return null;
+  const legacy: unknown = t.category;
+  const path = Array.isArray(legacy) ? legacy.join(" > ") : legacy;
+  const statement = t.name.trim().replace(/\s+/g, " ");
+  if (/\b(fees?|commission|interest|refund|reversal|reversed|chargeback)\b/i.test(`${statement} ${t.merchant_name ?? ""}`)) return null;
+  if (path === "Payment > Credit Card" && (/^BILT CARD PMT(?: [*0-9]+)?$/i.test(statement) || (/^Barclays$/i.test(t.merchant_name ?? "") && /^BARCLAYCARD US CREDITCARD$/i.test(statement))))
+    return { type: "cardPayments", reason: "Exact legacy credit-card payment path, corroborating payment description and outgoing depository amount." };
+  if (path === "Service > Financial > Stock Brokers" && /^Robinhood$/i.test(statement) && (!t.merchant_name || /^Robinhood$/i.test(t.merchant_name)))
+    return { type: "investmentTransfers", reason: "Exact legacy broker path, exact broker merchant and outgoing depository amount support investment funding; not a security purchase or contribution date." };
+  return null;
+}
+
+function purpose(t: BudgetTransaction, movement: ReturnType<typeof movementEvidence>): "purchase" | "movement" | "unverified" {
   if (t.category_override != null) {
     if (manualMovements.has(t.category_override)) return "movement";
     return ["needs_review", "income"].includes(t.category_override) ? "unverified" : "purchase";
@@ -23,9 +47,9 @@ function purpose(t: BudgetTransaction): "purchase" | "movement" | "unverified" {
   const modern = ["HIGH", "VERY_HIGH"].includes(t.plaid_category_confidence ?? "") &&
     !!t.plaid_primary_category && !!t.plaid_detailed_category &&
     t.plaid_detailed_category.startsWith(`${t.plaid_primary_category}_`);
-  if (modern && verifiedMovementDetails.has(t.plaid_detailed_category!)) return "movement";
+  if (movement) return "movement";
   const c = classifyTransaction(t);
-  // Broad transfer labels, legacy paths, merchant guesses and Venmo are not
+  // Broad transfer labels, uncorroborated legacy paths, merchant guesses and Venmo are not
   // evidence that a debit was an internal movement rather than a purchase.
   return modern && c.confidence === "high" && !manualMovements.has(c.category) && c.category !== "income"
     ? "purchase" : "unverified";
@@ -83,6 +107,7 @@ export function summarizeMonthlyActivity(
   const currencies = new Set<string>();
   let unknownCurrency = false, unknownAmountCount = 0, unknownStatusCount = 0;
   let posted = 0, confirmed = 0, unverified = 0, pending = 0, excludedMovements = 0;
+  const movements = { cardPayments: 0, investmentTransfers: 0, internalTransfers: 0, other: 0 };
   const rows = unique.map((t) => {
     const account = byId.get(t.account_id ?? "");
     const recordedCurrency = t.transaction_currency ?? account?.currency ?? null;
@@ -90,12 +115,16 @@ export function summarizeMonthlyActivity(
     if (currency) currencies.add(currency);
     else unknownCurrency = true;
     const amount = numericAmount(t.amount);
-    const category = purpose(t);
+    const movement = movementEvidence(t, account);
+    const category = purpose(t, movement);
     if (amount == null) unknownAmountCount++;
     if (t.pending == null) unknownStatusCount++;
     if (amount != null && amount > 0) {
       const cents = Math.round(amount * 100);
-      if (category === "movement") excludedMovements += cents;
+      if (category === "movement") {
+        excludedMovements += cents;
+        if (t.pending === false && movement) movements[movement.type] += cents;
+      }
       else if (t.pending === true) pending += cents;
       else if (t.pending === false) {
         posted += cents;
@@ -109,6 +138,7 @@ export function summarizeMonthlyActivity(
       account: account?.account_name || "Account unavailable",
       institution: account?.institution_name ?? null,
       purpose: amount != null && amount < 0 ? "incoming" as const : category,
+      purposeReason: movement?.reason ?? null,
     };
   });
   // Do not convert or combine currencies, or treat missing amounts as zero.
@@ -124,6 +154,7 @@ export function summarizeMonthlyActivity(
     totalTransactions: rows.length, postedPurchases: asMoney(posted),
     confirmedPurchases: asMoney(confirmed), unverifiedDebits: asMoney(unverified),
     pendingPurchases: asMoney(pending), excludedMovements: asMoney(excludedMovements),
+    movementBreakdown: Object.fromEntries(Object.entries(movements).map(([key, cents]) => [key, asMoney(cents)])) as Record<MovementType, number | null>,
     unknownAmountCount, unknownStatusCount, omittedDuplicates, unresolvedRepeatedSources,
     // No sync timestamp or source-history completeness is established by a read.
     provisional: true as const,

@@ -58,3 +58,17 @@ it("keeps errors visible instead of claiming zero spending and supports a read-o
   await screen.findByText("Venmo page 1");
   expect(fetcher).toHaveBeenCalledTimes(2);
 });
+
+it("uses the same monthly endpoint for a six-row Overview preview with a full-history link", async () => {
+  const fetcher = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const data = await response(String(url)).json();
+    return Response.json({ ...data, rows: Array.from({ length: 8 }, (_, i) => ({ ...data.rows[0], id: String(i), merchant: `Preview merchant ${i}` })) });
+  });
+  render(<MonthlyTransactions preview />);
+  await screen.findByRole("heading", { name: "Recent transactions" });
+  expect(screen.queryByLabelText("Month")).toBeNull();
+  expect(within(screen.getByRole("table")).getAllByRole("row")).toHaveLength(7);
+  expect(screen.getByRole("link", { name: "View all transactions" }).getAttribute("href")).toBe("/transactions");
+  expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
+  expect(String(fetcher.mock.calls[0][0])).toContain("/api/transactions?view=monthly");
+});
