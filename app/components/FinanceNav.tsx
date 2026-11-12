@@ -8,7 +8,7 @@ const links = [
   ["Debt", "/debt"],
   ["Investments", "/investments"],
   ["Goals", "/goals"],
-  ["Reports", "/reports"],
+  ["Financial Report", "/reports"],
 ] as const;
 
 export default function FinanceNav({ active }: { active: string }) {

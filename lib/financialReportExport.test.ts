@@ -1,0 +1,20 @@
+import { expect, it } from "vitest";
+import { PDFDocument } from "pdf-lib";
+import { unzipSync, strFromU8 } from "fflate";
+import { exportReportDocx, exportReportPdf, reportDocumentLines } from "./financialReportExport";
+import type { FinancialReport } from "./financialReport";
+const report: FinancialReport = { version: 1, generatedAt: "2026-11-12T15:00:00Z", month: "2026-11", currency: "USD", netWorth: 1500, coverageKey: "PRIVATE-COVERAGE-HASH", previousGeneratedAt: null, netWorthChange: null, sections: [{ title: "Financial position", lines: ["Connected net worth: $1,500.00", "Purchase history unavailable", "Private label 東京"] }] };
+it("exports real DOCX and paginated PDF from the frozen report without mutation or private keys", async () => {
+  const before = JSON.stringify(report);
+  const docx = unzipSync(await exportReportDocx(report, true));
+  const xml = strFromU8(docx["word/document.xml"]);
+  expect(xml).toContain("$1,500.00"); expect(xml).toContain("東京");
+  expect(xml).toContain("Saved historical snapshot"); expect(xml).not.toContain("PRIVATE-COVERAGE-HASH");
+  const longReport = { ...report, sections: [{ title: "Account observations", lines: Array.from({ length: 150 }, (_, i) => `Account ${i} - Amount $10.00 - 東京`) }] };
+  const pdf = await PDFDocument.load(await exportReportPdf(longReport, true));
+  expect(pdf.getPageCount()).toBeGreaterThan(1);
+  expect(pdf.getTitle()).toBe("Personal Financial Report");
+  expect(JSON.stringify(report)).toBe(before);
+  expect(reportDocumentLines(report, false).join(" ")).toContain("Unsaved preview");
+  expect(reportDocumentLines(report, true).join(" ")).not.toContain("PRIVATE-COVERAGE-HASH");
+});
