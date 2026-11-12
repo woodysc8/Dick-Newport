@@ -293,6 +293,7 @@ export function weeklyMetrics(
   return {
     ...period,
     limit,
+    monthlyTargetEquivalent: limit == null ? null : Math.round(limit * 100 * 52 / 12) / 100,
     posted,
     pending: pending / 100,
     previous,

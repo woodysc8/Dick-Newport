@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DashboardAccount, getDashboardAccountClass } from "./dashboard";
+import { DashboardAccount, getDashboardAccountClass, institutionDisplayLabel } from "./dashboard";
 
 function account(account_type: string, account_subtype: string): DashboardAccount {
   return {
@@ -15,6 +15,11 @@ function account(account_type: string, account_subtype: string): DashboardAccoun
 }
 
 describe("getDashboardAccountClass", () => {
+  it("preserves recorded institution metadata without guessing from account names", () => {
+    expect(institutionDisplayLabel("USAA")).toBe("USAA");
+    expect(institutionDisplayLabel("Unknown Institution")).toBe("Institution metadata unavailable");
+    expect(institutionDisplayLabel(null)).toBe("Institution metadata unavailable");
+  });
   it("classifies Plaid's roth investment subtype as retirement", () => {
     expect(getDashboardAccountClass(account("investment", "roth"))).toBe("retirement");
   });

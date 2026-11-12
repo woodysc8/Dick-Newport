@@ -119,6 +119,17 @@ describe("buildPortfolioGrowthSeries", () => {
 });
 
 describe("cash-aware portfolio positions", () => {
+  it("preserves connected balances without fabricating missing holdings or cash", () => {
+    const view = buildDashboardViewModel({
+      accounts: [account({ current_balance: 20901 })],
+      monthTransactions: [], historicalTransactions: [], holdings: [], snapshots: [],
+      profile: STARTER_FINANCIAL_PROFILE,
+    });
+    expect(view.financialPosition.equities.currentValue).toBe(20901);
+    expect(view.financialPosition.equities.investedValue).toBeNull();
+    expect(view.financialPosition.equities.cashValue).toBeNull();
+    expect(view.financialPosition.equities.totalGain).toBeNull();
+  });
   it("exposes generalized planning, property ownership, debts, retirement plans, and goals", () => {
     const view = buildDashboardViewModel({
       accounts: [],

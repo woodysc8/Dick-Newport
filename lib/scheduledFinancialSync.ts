@@ -58,6 +58,7 @@ export async function runScheduledFinance(
               context.userId,
               now,
               true,
+              true,
             ),
             now,
           );

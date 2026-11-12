@@ -14,6 +14,13 @@ export interface DashboardAccount {
 
 export type DashboardAccountClass = "cash" | "investment" | "retirement" | "credit" | "loan" | "other";
 
+export function institutionDisplayLabel(name: string | null | undefined): string {
+  const value = name?.trim();
+  return !value || /^unknown institution$/i.test(value)
+    ? "Institution metadata unavailable"
+    : value;
+}
+
 export function getDashboardAccountClass(account: DashboardAccount): DashboardAccountClass {
   const type = (account.account_type ?? "").toLowerCase();
   const subtype = (account.account_subtype ?? "").toLowerCase();

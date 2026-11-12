@@ -283,6 +283,7 @@ describe("deterministic briefing", () => {
       stale: true,
       lastSync: null,
       planning: null,
+      briefingDetails: null,
     } as Awaited<ReturnType<typeof loadFinancialBudget>>;
     const result = generateBriefing(data, now);
     expect(result).toEqual(generateBriefing(data, now));

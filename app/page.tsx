@@ -1,4 +1,6 @@
+import { institutionDisplayLabel } from "../lib/dashboard";
 import type { ReactNode } from "react";
+import { isDashboardInvestmentAccount } from "../lib/dashboard";
 import { redirect } from "next/navigation";
 import { signOut } from "./auth/actions";
 import {
@@ -83,7 +85,7 @@ function formatDate(date: string): string {
 }
 
 function accountName(account: DashboardAccount): string {
-  return `${account.institution_name ?? "Unknown institution"} · ${account.account_name ?? "Unnamed account"}${account.mask ? ` ••••${account.mask}` : ""}`;
+  return `${institutionDisplayLabel(account.institution_name)} · ${account.account_name ?? "Unnamed account"}${account.mask ? ` ••••${account.mask}` : ""}`;
 }
 
 function accountCurrency(account: DashboardAccount | undefined): string | null {
@@ -314,10 +316,10 @@ export default async function Home() {
   const connectedInvestmentValue = view.connectedAccountSummary.investments;
   const manualInvestmentValue = view.profileAccountBalances.investments;
   const nextSteps: Array<{ title: string; detail: string; href: string; action: string }> = [];
-  if (accounts.length === 0) nextSteps.push({ title: "Connect your accounts", detail: "See live balances and activity in one place.", href: "#connect-account", action: "Connect accounts" });
-  if (view.financialPlanning.income.status === "unavailable") nextSteps.push({ title: "Set up your income", detail: "Calculate monthly cash flow using take-home pay.", href: "/paychecks", action: "Set up income" });
-  if (profile.weeklySpending?.weeklyTarget == null) nextSteps.push({ title: "Set a weekly spending target", detail: "Make day-to-day spending easier to track.", href: "/budget", action: "Set target" });
-  if (!profile.goals?.length) nextSteps.push({ title: "Create a financial goal", detail: "Give your next savings priority a clear target.", href: "/goals", action: "Create goal" });
+  if (!accountsResult.error && accounts.length === 0) nextSteps.push({ title: "Connect your accounts", detail: "See live balances and activity in one place.", href: "#connect-account", action: "Connect accounts" });
+  if (!profileResult.error && view.financialPlanning.income.status === "unavailable") nextSteps.push({ title: "Set up your income", detail: "Calculate monthly cash flow using take-home pay.", href: "/paychecks", action: "Set up income" });
+  // The weekly card owns setup/review prompts using the saved canonical limit.
+  if (!profileResult.error && !profile.goals?.length) nextSteps.push({ title: "Create a financial goal", detail: "Give your next savings priority a clear target.", href: "/goals", action: "Create goal" });
 
   return (
     <main className="min-h-screen overflow-x-hidden bg-[var(--bg)] text-[var(--text)]">
@@ -331,6 +333,7 @@ export default async function Home() {
           <div className="flex flex-wrap items-center justify-end gap-3"><PlaidConnect /><a href="/settings/profile" className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Profile</a><form action={signOut}><button className="rounded-full border border-[var(--border)] px-4 py-2 text-sm font-medium">Sign out</button></form></div>
         </header>
         <div className="mt-5 overflow-x-auto"><FinanceNav active="Overview" /></div>
+        {(accountsResult.error || profileResult.error) && <p role="alert" className="mt-5 text-sm">Account or profile data could not be loaded. Financial position and planning may be incomplete; retry before relying on these figures.</p>}
         <WeeklyBudget />
         <BudgetEngine />
         <TransactionsWorkspace preview />
@@ -367,7 +370,7 @@ export default async function Home() {
         <section className="mt-12" id="accounts">
           <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Your accounts</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Balances in one place</h2></div><a href="/accounts" className="text-sm font-medium text-[var(--accent)] hover:underline">See all</a></div>
           <Panel className="mt-5">
-            {connectedAccounts.length === 0 && manualAccounts.length === 0 ? <div id="connect-account" className="py-3"><p className="font-medium">Connect your first account</p><p className="mt-1 text-sm text-[var(--text-muted)]">Bring in live balances while keeping your manual estimates separate.</p><PlaidConnectShortcut /></div> : <div className="divide-y divide-[var(--border)]">{connectedAccounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.account_name ?? "Unnamed account"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{account.institution_name ?? "Connected account"} · {account.account_type ?? "Account"} · <span className="text-[var(--accent)]">Connected</span></p></div><p className="shrink-0 text-sm font-semibold">{account.current_balance == null ? "Unknown" : money(Number(account.current_balance), account.currency ?? profile.currency)}</p></div>)}{manualAccounts.map((account, index) => <div key={`${account.name}-${index}`} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.name}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{account.institutionLabel ?? "Manually entered"} · {account.accountType} · <span className="text-[var(--accent)]">Manual</span></p></div><p className="shrink-0 text-sm font-semibold">{account.balance == null ? "Unknown" : money(account.balance, account.currency ?? profile.currency)}</p></div>)}</div>}
+            {connectedAccounts.length === 0 && manualAccounts.length === 0 ? <div id="connect-account" className="py-3"><p className="font-medium">Connect your first account</p><p className="mt-1 text-sm text-[var(--text-muted)]">Bring in live balances while keeping your manual estimates separate.</p><PlaidConnectShortcut /></div> : <div className="divide-y divide-[var(--border)]">{connectedAccounts.map((account) => <div key={account.id} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.account_name ?? "Unnamed account"}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{institutionDisplayLabel(account.institution_name)} · {account.account_type ?? "Account"} · <span className="text-[var(--accent)]">Connected</span></p></div><p className="shrink-0 text-sm font-semibold">{account.current_balance == null ? "Unknown" : money(Number(account.current_balance), account.currency ?? profile.currency)}</p></div>)}{manualAccounts.map((account, index) => <div key={`${account.name}-${index}`} className="flex items-center justify-between gap-4 py-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{account.name}</p><p className="mt-1 truncate text-xs text-[var(--text-muted)]">{account.institutionLabel ?? "Manually entered"} · {account.accountType} · <span className="text-[var(--accent)]">Manual</span></p></div><p className="shrink-0 text-sm font-semibold">{account.balance == null ? "Unknown" : money(account.balance, account.currency ?? profile.currency)}</p></div>)}</div>}
           </Panel>
         </section>
 
@@ -375,7 +378,8 @@ export default async function Home() {
           <div className="flex items-end justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Investments</p><h2 className="mt-2 text-2xl font-semibold tracking-[-0.03em]">Your portfolio</h2></div><a href="/investments" className="text-sm font-medium text-[var(--accent)] hover:underline">View investments</a></div>
           <Panel className="mt-5">
             <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-sm text-[var(--text-muted)]">Total recorded investment value</p><p className="mt-2 text-3xl font-semibold tracking-[-0.05em]">{formatAggregate(view.accountSummary.investments, view.accountSummary.currency, view.accountSummary.mixedCurrency)}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{manualInvestmentValue != null && manualInvestmentValue > 0 ? `Manual accounts: ${formatMoney(manualInvestmentValue)}` : "Connected accounts only"}</p></div>{view.portfolioGrowth.changeSinceFirstSnapshot != null && view.portfolioGrowth.currency && <p className={view.portfolioGrowth.changeSinceFirstSnapshot >= 0 ? "text-sm font-semibold text-[var(--up)]" : "text-sm font-semibold text-[var(--down)]"}>{signedMoney(view.portfolioGrowth.changeSinceFirstSnapshot, view.portfolioGrowth.currency)} since first snapshot</p>}</div>
-            {view.financialPosition.equities.holdings.length + view.financialPosition.retirement.holdings.length > 0 ? <div className="mt-5 divide-y divide-[var(--border)]">{[...view.financialPosition.equities.holdings, ...view.financialPosition.retirement.holdings].slice(0, 3).map((holding) => <div key={holding.id} className="flex items-center justify-between gap-4 py-3 text-sm"><span>{holding.security_name ?? holding.ticker_symbol ?? "Unnamed holding"}</span><span>{holding.institution_value == null || !portfolioCurrency ? "Unknown" : money(Number(holding.institution_value), portfolioCurrency)}</span></div>)}</div> : <div className="mt-5"><p className="text-sm text-[var(--text-muted)]">No connected investment data yet.</p><a href="/investments" className="mt-2 inline-block text-sm font-medium text-[var(--accent)] hover:underline">Explore Investments →</a></div>}
+            {holdingsResult.error ? <p role="alert" className="mt-5 text-sm">Individual holdings are unavailable because the holdings query failed. Connected balances are shown separately.</p> : holdings.length > 0 ? <div className="mt-5 divide-y divide-[var(--border)]">{holdings.slice(0, 3).map((holding) => <div key={holding.id} className="flex items-center justify-between gap-4 py-3 text-sm"><span>{holding.security_name ?? holding.ticker_symbol ?? "Unnamed holding"}</span><span>{holding.institution_value == null || !(holding.currency ?? holding.iso_currency_code) ? "Unknown" : money(Number(holding.institution_value), (holding.currency ?? holding.iso_currency_code)!)}</span></div>)}</div> : <div className="mt-5"><p className="text-sm text-[var(--text-muted)]">{accounts.some((account) => isDashboardInvestmentAccount(account)) ? "Investment balances connected. Individual holdings are not yet available." : "No connected investment accounts yet."}</p><a href="/investments" className="mt-2 inline-block text-sm font-medium text-[var(--accent)] hover:underline">Explore Investments →</a></div>}
+            <p className="mt-3 text-xs text-[var(--text-muted)]">Balances and holdings are recorded snapshots. Investment freshness is unverified; a transaction sync does not verify holdings freshness.</p>
           </Panel>
         </section>
 

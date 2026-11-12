@@ -6,6 +6,20 @@ import {
   transactionFilters,
 } from "./transactionData";
 
+it("marks legacy snapshots without sync status provisional even with confirmed sources", async () => {
+  const rpc = vi.fn().mockResolvedValue({ data: {
+    user_id: "user-a", transactions: [], weekly_limit: 420,
+    accounts: [{ id: "a", created_at: "2026-01-01", weekly_budget_source: "include", currency: "USD" }],
+  }, error: null });
+  const { metrics, freshness } = await loadWeeklyBudget({ rpc } as unknown as SupabaseClient, "user-a");
+  expect(metrics.limit).toBe(420);
+  expect(metrics.monthlyTargetEquivalent).toBe(1820);
+  expect(metrics.provisional).toBe(true);
+  expect(metrics.safeRemaining).toBeNull();
+  expect(metrics.suggestedDaily).toBeNull();
+  expect(freshness.lastSyncAt).toBeNull();
+});
+
 it.each([
   "page=0",
   "page=1001",

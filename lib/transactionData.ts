@@ -134,9 +134,9 @@ export async function loadWeeklyBudget(
   const metrics = Array.isArray(data.category_rules) && Array.isArray(data.account_rules)
     ? financialBudget(transactions, accounts, limit, { categories: data.category_rules, accounts: data.account_rules, monthly_limit: data.monthly_limit ?? null }, now).weekly
     : weeklyMetrics(transactions, accounts, limit, now);
-  if (Array.isArray(data.jobs)) {
-    const last = data.jobs.find((job: { kind: string }) => job.kind === "sync")?.last_success_at;
-    if (!last || now.getTime() - Date.parse(last) > 86400000 || !Number.isFinite(Date.parse(last))) {
+  {
+    const last = Array.isArray(data.jobs) ? data.jobs.find((job: { kind: string }) => job.kind === "sync")?.last_success_at : null;
+    if (!last || now.getTime() - Date.parse(last) >= 86400000 || Date.parse(last) > now.getTime() || !Number.isFinite(Date.parse(last))) {
       metrics.provisional = true; metrics.safeRemaining = null; metrics.suggestedDaily = null;
     }
   }

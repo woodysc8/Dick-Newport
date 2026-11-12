@@ -13,6 +13,7 @@ import { TransactionAvailabilityError } from "./transactionData";
 import { calculateFinancialPlanning } from "./financialPlanning";
 import { normalizeFinancialProfile } from "./financialProfileNormalization";
 import type { FinancialProfile } from "./financialProfileDefaults";
+import type { DashboardAccount, InvestmentHolding } from "./dashboard";
 
 export type FinancialSnapshot = {
   user_id: string;
@@ -59,6 +60,7 @@ export async function loadFinancialBudget(
   userId: string,
   now = new Date(),
   scheduled = false,
+  includeBriefingDetails = false,
 ) {
   const month = monthPeriod(now),
     week = weekPeriod(now);
@@ -113,7 +115,8 @@ export async function loadFinancialBudget(
   const stale =
     !lastSync ||
     !Number.isFinite(Date.parse(lastSync)) ||
-    now.getTime() - Date.parse(lastSync) > 86400000;
+    Date.parse(lastSync) > now.getTime() ||
+    now.getTime() - Date.parse(lastSync) >= 86400000;
   if (stale) {
     result.weekly.provisional = true;
     result.weekly.safeRemaining = null;
@@ -131,8 +134,27 @@ export async function loadFinancialBudget(
       recurring: planned.recurringExpenses.estimatedMonthlyExpenses,
     };
   }
+  let briefingDetails: {
+    accounts: DashboardAccount[] | null;
+    holdings: InvestmentHolding[] | null;
+  } | null = null;
+  if (includeBriefingDetails) {
+    const [accounts, holdings] = await Promise.all([
+      client.from("accounts")
+        .select("id, account_name, account_type, account_subtype, institution_name, current_balance, available_balance, currency, plaid_account_id, persistent_account_id, created_at")
+        .eq("user_id", userId).order("id").limit(501),
+      client.from("investment_holdings")
+        .select("id, plaid_account_id, ticker_symbol, security_name, quantity, institution_value, cost_basis, currency, iso_currency_code")
+        .eq("user_id", userId).order("id").limit(201),
+    ]);
+    briefingDetails = {
+      accounts: accounts.error || (accounts.data?.length ?? 0) > 500 ? null : (accounts.data ?? []).map((a) => ({ ...a, mask: null })) as DashboardAccount[],
+      holdings: holdings.error || (holdings.data?.length ?? 0) > 200 ? null : holdings.data as InvestmentHolding[],
+    };
+  }
   return {
     ...result,
+    briefingDetails,
     planning,
     stale,
     lastSync: lastSync ?? null,

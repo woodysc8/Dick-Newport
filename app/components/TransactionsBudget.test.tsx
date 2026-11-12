@@ -58,6 +58,23 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it("shows engine provisional exposure and configured-budget review without recalculating a missing estimate", async () => {
+  const metrics = weeklyMetrics([{ ...row, amount: 527.26, normalized_category: "needs_review", date: "2026-11-12" }], [account], 420, new Date("2026-11-12T17:00:00Z"));
+  const fetcher = vi.spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ metrics, accounts: [account], freshness: { lastSyncAt: null } }));
+  const { unmount } = render(<WeeklyBudget />);
+  await waitFor(() => expect(screen.getByText(/provisional\):/)).toBeTruthy());
+  expect(screen.getByText(/provisional\):/).textContent).toContain("-$107.26");
+  expect(screen.getByText(/transactions need review/).textContent).toContain("Sync status unavailable");
+  expect(screen.getByRole("link", { name: "Review weekly spending" })).toBeTruthy();
+  expect(screen.getByText(/Monthly budget target equivalent/).textContent).toContain("$1,820.00");
+  unmount();
+  fetcher.mockResolvedValue(Response.json({ metrics: { ...metrics, conservativeRemaining: null }, accounts: [account] }));
+  render(<WeeklyBudget />);
+  await waitFor(() => expect(screen.getByText(/provisional\):/)).toBeTruthy());
+  expect(screen.getByText(/provisional\):/).textContent).toContain("Unavailable");
+  expect(screen.queryByText(/-\$107\.26/)).toBeNull();
+});
+
 it("refreshes the date-based week after local Monday begins without writing records", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   vi.setSystemTime(new Date("2026-11-09T04:59:30Z"));

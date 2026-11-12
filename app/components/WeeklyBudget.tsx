@@ -147,7 +147,7 @@ export default function WeeklyBudget({
         </div>
         {!editable && (
           <a href="/budget#weekly-spending" className="text-sm underline">
-            {m?.limit == null ? "Set budget" : "Edit budget"}
+            {m?.limit == null ? "Set budget" : "Review weekly spending"}
           </a>
         )}
       </div>
@@ -183,6 +183,10 @@ export default function WeeklyBudget({
             {m.start} – {addDays(m.end, -1)} · Monday–Sunday · America/New_York
             · USD
           </p>
+          <details className="mt-3 text-sm">
+            <summary className="cursor-pointer">
+              {m.reviewCount} transactions need review · {data?.freshness?.lastSyncAt ? (m.provisional ? "Provisional data" : "Sync recorded") : "Sync status unavailable"}
+            </summary>
           <p className="mt-2 text-sm">
             Last recorded complete sync:{" "}
             {data?.freshness?.lastSyncAt ??
@@ -197,15 +201,17 @@ export default function WeeklyBudget({
               allowance.
             </p>
           )}
+          <p className="mt-2">Unclassified exposure: {dollars(m.review)} · Excluded: {dollars(m.excluded)} · Unmatched credits: {dollars(m.unmatchedCredits)} · Non-USD/unknown currency: {m.currencyCount}. Omitted totals include pending and posted activity.</p>
+          </details>
           <div className="mt-5 grid gap-5 sm:grid-cols-3">
             <div>
-              <p className="text-sm">Posted discretionary</p>
+              <p className="text-sm">Confirmed posted discretionary</p>
               <p className="mt-1 text-3xl font-semibold">{dollars(m.posted)}</p>
             </div>
             <div>
-              <p className="text-sm">Remaining allowance</p>
+              <p className="text-sm">Confirmed remaining allowance</p>
               <p className="mt-1 text-3xl font-semibold">
-                {m.provisional || m.reviewCount > 0 || m.currencyCount > 0
+                {m.provisional || !data?.freshness?.lastSyncAt || m.reviewCount > 0 || m.currencyCount > 0
                   ? "Provisional — review required"
                   : dollars(m.remaining)}
               </p>
@@ -215,16 +221,11 @@ export default function WeeklyBudget({
               <p className="mt-1 text-3xl font-semibold">{dollars(m.limit)}</p>
             </div>
           </div>
-          {(m.provisional || m.reviewCount > 0 || m.currencyCount > 0) && (
+          {(m.provisional || !data?.freshness?.lastSyncAt || m.reviewCount > 0 || m.currencyCount > 0) && (
             <p className="mt-3 text-sm" role="status">
               Confirmed subtotal allowance: {dollars(m.remaining)}. After known
-              unreviewed debits and pending purchases:{" "}
-              {dollars(
-                m.conservativeRemaining ??
-                  (m.remaining == null
-                    ? null
-                    : m.remaining - m.review - m.pending),
-              )}
+              unreviewed debits and pending purchases (provisional):{" "}
+              {m.conservativeRemaining == null ? "Unavailable" : dollars(m.conservativeRemaining)}
               . This estimate is not a safe-to-spend amount; missing coverage or
               currency data may change it.{" "}
               <a
@@ -266,17 +267,11 @@ export default function WeeklyBudget({
             </p>
           )}
           <p className="mt-2 text-sm">
-            Needs review: {m.reviewCount} ({dollars(m.review)}) · Excluded:{" "}
-            {dollars(m.excluded)} · Unmatched credits:{" "}
-            {dollars(m.unmatchedCredits)} · Non-USD/unknown currency:{" "}
-            {m.currencyCount} transactions. Omitted totals include posted and
-            pending activity.
-          </p>
-          <p className="mt-2 text-sm">
             {m.daysRemaining} calendar days remaining, including today ·
             Average/day: {dollars(m.averageDaily)} · Suggested remaining/day:{" "}
-            {dollars(m.suggestedDaily)}
+            {m.provisional || !data?.freshness?.lastSyncAt ? "Unavailable pending review/freshness" : dollars(m.suggestedDaily)}
           </p>
+          <p className="mt-2 text-sm">Monthly budget target equivalent: {dollars(m.monthlyTargetEquivalent)} (52 weeks / 12 months). This is a target, not actual spending. Groceries count in the weekly budget; rent, transfers and card payments are excluded by default. Do not add this target to recurring obligations without checking overlap.</p>
           <p className="mt-2 text-sm">
             Previous full week: {dollars(m.previous)} · Change from current week
             to date: {m.change >= 0 ? "+" : ""}

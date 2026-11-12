@@ -65,7 +65,7 @@ export function POST(request: Request) {
       );
     try {
       const preview = generateBriefing(
-        await loadFinancialBudget(supabase, user.id, now),
+        await loadFinancialBudget(supabase, user.id, now, false, true),
         now,
       );
       if (body.action === "preview") return { preview };

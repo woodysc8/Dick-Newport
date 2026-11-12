@@ -410,7 +410,7 @@ function buildPortfolioPosition(
   const mixedCurrency = currencies.size > 1 || unknownCurrency;
   const currency = currencies.size === 1 && !unknownCurrency ? [...currencies][0] : null;
   const currentValue = mixedCurrency ? null : sumBalances(purposeAccounts);
-  const holdingsHaveKnownValues = purposeHoldings.every((holding) => numberOrNull(holding.institution_value) != null);
+  const holdingsHaveKnownValues = purposeHoldings.length > 0 && purposeHoldings.every((holding) => numberOrNull(holding.institution_value) != null);
   const investedValue = mixedCurrency || !holdingsHaveKnownValues ? null : purposeHoldings.reduce((total, holding) => total + numberOrNull(holding.institution_value)!, 0);
   const holdingsWithMetrics = purposeHoldings.map((holding) => {
     const value = numberOrNull(holding.institution_value);
