@@ -80,6 +80,7 @@ function provider() {
     itemRemove: vi.fn().mockResolvedValue({ data: {} }),
     linkTokenCreate: vi.fn().mockResolvedValue({ data: { link_token: "synthetic-link", expiration: "2030-01-01" } }),
     itemPublicTokenExchange: vi.fn().mockResolvedValue({ data: { item_id: "synthetic-item", access_token: "synthetic-access" } }),
+    itemGet: vi.fn().mockResolvedValue({ data: { item: { item_id: "synthetic-item", institution_name: "Fixture Brokerage", products: ["investments"], consented_products: ["investments"] } } }),
   };
 }
 beforeEach(() => {
@@ -263,6 +264,20 @@ describe("personal credential HTTP and storage integration (mock providers)", ()
     expect(tables.accounts).toHaveLength(1); expect(tables.transactions).toHaveLength(1); expect(tables.investment_holdings).toHaveLength(1);
     expect((await DELETE(request("DELETE"))).status).toBe(200);
     expect(tables.user_plaid_credentials).toHaveLength(0);
+  });
+
+  it("saves only provider-verified Investments permission and never replaces a previously saved token", async () => {
+    await POST(request("POST", input()));
+    const session = await (await link(request("POST", { product: "investments" }))).json();
+    mocks.clients.get(clientA)!.itemGet.mockResolvedValueOnce({ data: { item: { item_id: "synthetic-item", institution_name: "Fixture", consented_products: ["transactions"], products: ["transactions"] } } });
+    const body = { public_token: "synthetic-public", credential_session: session.credential_session };
+    expect((await exchange(request("POST", body))).status).toBe(200);
+    expect(tables.plaid_items[0].products).toEqual(["transactions"]);
+    const savedToken = tables.plaid_items[0].access_token;
+    expect((await exchange(request("POST", body))).status).toBe(200);
+    expect(tables.plaid_items[0].products).toEqual(["investments"]);
+    expect(tables.plaid_items[0].access_token).toBe(savedToken);
+    expect(tables.plaid_items).toHaveLength(1); expect(mocks.clients.get(clientA)!.itemRemove).not.toHaveBeenCalled();
   });
 
   it("retains disabled credentials and original tokens after failed revocation, then retries safely", async () => {

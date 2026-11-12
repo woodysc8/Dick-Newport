@@ -40,3 +40,12 @@ it("rejects partial coverage and query failures", async () => {
     await expect(loadConnectedPosition({ from: () => q } as unknown as SupabaseClient, "owner")).rejects.toThrow("coverage unavailable");
   }
 });
+it("withholds overlapping investment source totals without deduplicating on account names", () => {
+  const a = { ...account, account_type: "investment", account_subtype: "brokerage", plaid_item_id: "first", plaid_account_id: "first-account" };
+  const b = { ...a, id: "separate", plaid_item_id: "second", plaid_account_id: "second-account" };
+  expect(summarizeConnectedPosition([a, b])).toMatchObject({ duplicatesOmitted: 0, unresolvedInvestmentOverlap: true, summary: { investments: null, netWorth: null } });
+  expect(summarizeConnectedPosition([{ ...a, persistent_account_id: "same" }, { ...b, persistent_account_id: "same" }])).toMatchObject({ duplicatesOmitted: 1, unresolvedInvestmentOverlap: false });
+  expect(summarizeConnectedPosition([{ ...a, persistent_account_id: "one" }, { ...b, persistent_account_id: "two" }]).summary.netWorth).toBe(2000);
+  expect(summarizeConnectedPosition([a, { ...b, account_subtype: "roth" }]).unresolvedInvestmentOverlap).toBe(false);
+  expect(summarizeConnectedPosition([a, { ...b, institution_name: "Unknown Institution", account_subtype: null }]).summary.netWorth).toBeNull();
+});

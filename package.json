@@ -13,6 +13,7 @@
     "test:financial": "vitest run lib/connectedPosition.test.ts lib/monthlyActivity.test.ts lib/monthlyActivityData.test.ts lib/transactionClassification.test.ts lib/transactionSuggestions.test.ts lib/budgetEngine.test.ts lib/discretionaryBudget.test.ts lib/accounting.test.ts lib/transactionData.test.ts lib/financialBriefing.test.ts lib/financialAutomation.test.ts lib/financialContext.test.ts lib/requestSecurity.test.ts app/api/transactions/weeklyRoutes.test.ts app/api/budget-engine/engineRoutes.test.ts app/api/cron/financial/route.test.ts",
     "test:all": "vitest run",
     "test:reports": "vitest run lib/financialReport app/components/FinancialReport app/api/financial-report app/api/cron/financial-report",
+    "test:holdings": "vitest run lib/plaidHoldings lib/investmentHolding app/api/plaid/holdings app/components/InvestmentHoldingsControls app/investments/page.test.tsx lib/connectedPosition.test.ts lib/plaidRefresh.test.ts lib/personalPlaid.integration.test.ts lib/financialReport.test.ts",
     "test:rls": "vitest run lib/supabase/rls.integration.test.ts"
   },
   "dependencies": {

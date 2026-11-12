@@ -255,7 +255,8 @@ describe("tenant-safe financial refresh", () => {
       investmentsHoldingsGet: vi.fn().mockRejectedValue({ response: { data: { error_code: "ACCESS_NOT_GRANTED", error_message: "sensitive-value" } } }) };
     const { refreshFinancialData } = await import("./plaidRefresh");
     const result = await refreshFinancialData(await context("user-a", state.items, client));
-    expect(result.items[0].warnings).toContain("Investments are not available for this Item.");
+    expect(result.items[0].warnings).toContain("Holdings sync is separate. Use Sync holdings on the Investments page.");
+    expect(client.investmentsHoldingsGet).not.toHaveBeenCalled();
     expect(state.holdings).toHaveLength(1);
     expect(state.snapshots).toHaveLength(0);
     expect(JSON.stringify(result)).not.toContain("sensitive-value");
@@ -488,7 +489,7 @@ describe("tenant-safe financial refresh", () => {
     expect(result.items[0].errors.join(" ")).toContain("Refresh step failed");
   });
 
-  it("upserts holdings, removes stale holdings, and writes a currency-safe snapshot", async () => {
+  it("keeps holdings separate from transaction refresh even after Investments consent", async () => {
     state.items.push({ user_id: "user-a", plaid_item_id: "item-a", access_token: "token-a", institution_name: "Robinhood", transactions_cursor: null, credential_id: "credential-a", connection_status: "active", products: ["transactions", "investments"] });
     state.accounts.push({ id: "account-row", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a", account_type: "investment", current_balance: 125 });
     state.holdings.push({ id: "stale", user_id: "user-a", plaid_item_id: "item-a", plaid_account_id: "account-a", security_id: "old" });
@@ -505,8 +506,10 @@ describe("tenant-safe financial refresh", () => {
     const { refreshFinancialData } = await import("./plaidRefresh");
     const result = await refreshFinancialData(await context("user-a", state.items, plaidClient));
 
-    expect(result.items[0]).toMatchObject({ holdings_updated: 1, holdings_removed: 1 });
+    expect(result.items[0]).toMatchObject({ holdings_updated: 0, holdings_removed: 0 });
+    expect(plaidClient.investmentsHoldingsGet).not.toHaveBeenCalled();
     expect(state.holdings).toHaveLength(1);
-    expect(state.snapshots[0].securities_value).toBe(125);
+    expect(state.holdings[0].security_id).toBe("old");
+    expect(state.snapshots).toHaveLength(0);
   });
 });

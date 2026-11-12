@@ -5,6 +5,8 @@ import { loadMonthlyActivity } from "./transactionData";
 import { normalizeFinancialProfile } from "./financialProfileNormalization";
 import { calculateFinancialPlanning } from "./financialPlanning";
 import { weekPeriod } from "./discretionaryBudget";
+import { loadInvestmentHoldingState, holdingStatusMessage } from "./investmentHoldingState";
+import { holdingPrice, unrealizedHoldingReturn } from "./investmentHoldingMetrics";
 
 export type ReportSection = { title: string; lines: string[] };
 export type FinancialReport = {
@@ -47,6 +49,7 @@ export async function generateFinancialReport(client: SupabaseClient, owner: str
     client.from("investment_holdings").select("plaid_account_id, security_name, ticker_symbol, quantity, institution_value, institution_price, cost_basis, currency, iso_currency_code, updated_at", { count: "exact" }).eq("user_id", owner).order("id").limit(501),
     client.from("profiles").select("financial_profile").eq("id", owner).maybeSingle(),
     client.from("transactions").select("updated_at").eq("user_id", owner).order("updated_at", { ascending: false }).limit(1),
+    loadInvestmentHoldingState(client, owner),
   ]);
   const position = results[0].status === "fulfilled" ? results[0].value : null;
   const activity = results[1].status === "fulfilled" ? results[1].value : null;
@@ -55,6 +58,7 @@ export async function generateFinancialReport(client: SupabaseClient, owner: str
   const profileResult = results[3].status === "fulfilled" ? results[3].value : null;
   const profile = profileResult && !profileResult.error && profileResult.data?.financial_profile ? normalizeFinancialProfile(profileResult.data.financial_profile) : null;
   const updatedResult = results[4].status === "fulfilled" ? results[4].value : null;
+  const holdingState = results[5].status === "fulfilled" ? results[5].value : null;
   const currency = position?.summary.currency ?? null;
   const netWorth = position?.summary.netWorth ?? null;
   // Used only for compatibility checks, never rendered or exported. Hashes do not
@@ -70,6 +74,7 @@ export async function generateFinancialReport(client: SupabaseClient, owner: str
       `Liabilities (credit cards and loans): ${reportMoney(position?.summary.credit, currency)}`,
       "Recorded connected assets minus liabilities. Holdings are already included in account balances; manual assets and debt are not added. This is not a complete household valuation.",
       position ? `${position.accounts.length} connected accounts; ${position.duplicatesOmitted} duplicate balance records omitted. ${position.unknownTypes ? "Unknown account types prevent a net-worth total." : ""}` : "Account coverage unavailable; no partial net-worth total is shown.",
+      ...(position?.unresolvedInvestmentOverlap ? ["Investment connections may overlap without verified durable identities. Combined investment balances and net worth are unavailable to prevent double-counting."] : []),
     ] },
     { title: "Changes since the previous saved report", lines: previous ? [
       `Previous report generated: ${previous.generatedAt}`,
@@ -77,10 +82,15 @@ export async function generateFinancialReport(client: SupabaseClient, owner: str
       "Monthly spending changes are not compared because report dates may cover different observation periods and transaction history remains provisional.",
     ] : ["No previous saved report is available. Historical changes are unavailable."] },
     { title: "Connected accounts and source freshness", lines: position?.accounts.length ? position.accounts.map((a) => `${reportLabel(a.account_name, "Connected account")} | ${reportLabel(a.institution_name, "Institution unverified")} | ${reportLabel(a.account_type)} | Balance ${reportMoney(a.current_balance, a.currency)} | Record updated ${timestamp(a.updated_at)}`) : ["Connected account data unavailable or no accounts connected."] },
-    { title: "Investment holdings", lines: holdings == null ? ["Holdings could not be read completely. Missing data is not a zero-value portfolio."] : !holdings.length ? ["Individual holdings are not yet available. See connected investment balances above."] : holdings.map((h) => {
+    { title: "Investment account coverage", lines: holdingState ? [
+      ...(!holdingState.schemaReady ? ["Holdings sync awaits the approved migration. Existing balances are retained."] : []),
+      ...holdingState.accounts.map((a) => `${reportLabel(a.account_name, "Investment account")} | ${holdingStatusMessage(a.holdings_status, a.holdings_synced_at)}`),
+    ] : ["Holdings sync status unavailable. Stored positions may be stale."] },
+    { title: "Investment holdings", lines: holdings == null ? ["Holdings could not be read completely. Missing data is not a zero-value portfolio."] : !holdings.length ? ["No individual holding records are stored. Read account coverage above to distinguish not synced, unsupported and explicitly empty responses."] : holdings.map((h) => {
       const c = h.currency ?? h.iso_currency_code;
-      const account = position?.accounts.find((a) => a.plaid_account_id === h.plaid_account_id);
-      return `${reportLabel(h.security_name, "Unnamed security")} | ${reportLabel(h.ticker_symbol)} | ${reportLabel(account?.account_name, "Account unavailable")} | Quantity ${reportNumber(h.quantity) ?? "Unavailable"} | Market value ${reportMoney(h.institution_value, c)} | Price ${reportMoney(h.institution_price, c)} | Cost basis ${reportMoney(h.cost_basis, c)} | Record updated ${timestamp(h.updated_at)}`;
+      const account = holdingState?.accounts.find((a) => a.plaid_account_id === h.plaid_account_id) ?? position?.accounts.find((a) => a.plaid_account_id === h.plaid_account_id);
+      const gain = unrealizedHoldingReturn(h.institution_value, h.cost_basis, h.quantity);
+      return `${reportLabel(h.security_name, "Unnamed security")} | ${reportLabel(h.ticker_symbol)} | ${reportLabel(account?.account_name, "Account unavailable")} | Quantity ${reportNumber(h.quantity) ?? "Unavailable"} | Market value ${reportMoney(h.institution_value, c)} | Price ${holdingPrice(h.institution_price, c)} | Cost basis ${reportMoney(h.cost_basis, c)} | Unrealized gain/loss (market value minus recorded total basis): ${reportMoney(gain.amount, c)} | Record updated ${timestamp(h.updated_at)}`;
     }) },
     { title: "Purchase history", lines: ["Purchase history unavailable", "Actual trade and tax-lot acquisition records are not stored. Record update times and account creation dates are not purchase dates. Returns and Roth contribution totals are unavailable."] },
     { title: `Monthly spending: ${month}`, lines: activity ? [

@@ -1,6 +1,5 @@
 import type { PlaidApi } from "plaid";
 import { decryptPlaidSecret } from "./plaidEncryption";
-import { calculateSecuritiesOnlyValue } from "./investmentSnapshots";
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
 import { classifyTransaction } from "./transactionClassification";
 import { collectTransactionSync } from "./transactionSyncBatch";
@@ -72,56 +71,11 @@ function formattedPlaidError(operation: string, error: unknown): string {
   return `${operation} failed. Check connection and product access.`;
 }
 
-function investmentsUnavailable(error: unknown) {
-  const code = (error as { response?: { data?: { error_code?: string } } })?.response?.data?.error_code;
-  return code === "PRODUCT_NOT_SUPPORTED" || code === "PRODUCT_NOT_READY" || code === "INVALID_PRODUCT" || code === "ACCESS_NOT_GRANTED" || code === "ADDITIONAL_CONSENT_REQUIRED";
-}
-
-function isInvestmentAccount(account: { type?: string | null; subtype?: string | null }) {
-  const type = (account.type ?? "").toLowerCase();
-  const subtype = (account.subtype ?? "").toLowerCase();
-  return type === "investment" || subtype.includes("brokerage") || subtype.includes("investment");
-}
-
-function isRobinhoodItem(item: StoredItem) {
-  return (item.institution_name ?? "").toLowerCase().includes("robinhood");
-}
-
-function localSnapshotDate() {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "America/New_York",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date());
-  const part = (type: string) => parts.find((item) => item.type === type)?.value;
-  return `${part("year")}-${part("month")}-${part("day")}`;
-}
 
 function isUniqueViolation(error: { code?: string } | null) {
   return error?.code === "23505";
 }
 
-async function persistDailyInvestmentSnapshot(
-  context: PlaidRefreshContext,
-  item: StoredItem,
-  plaidAccountId: string,
-  portfolioValue: number | null,
-  securitiesValue: number | null,
-) {
-  const { error } = await context.supabase.from("investment_snapshots").upsert(
-    {
-      user_id: context.userId,
-      plaid_item_id: item.plaid_item_id,
-      plaid_account_id: plaidAccountId,
-      snapshot_date: localSnapshotDate(),
-      portfolio_value: portfolioValue,
-      securities_value: securitiesValue,
-    },
-    { onConflict: "user_id,plaid_account_id,snapshot_date" },
-  );
-  if (error) throw new Error(`Investment snapshot persistence failed: request failed`);
-}
 
 async function refreshAccounts(context: PlaidRefreshContext, item: StoredItem, result: ItemRefreshResult) {
   let response;
@@ -359,91 +313,6 @@ async function refreshTransactions(context: PlaidRefreshContext, item: StoredIte
   if (cursorError) throw new Error(`Transaction cursor persistence failed: request failed`);
 }
 
-async function refreshHoldings(context: PlaidRefreshContext, item: StoredItem, result: ItemRefreshResult) {
-  const { data: itemAccounts, error: itemAccountsError } = await context.supabase
-    .from("accounts")
-    .select("plaid_account_id, account_type, account_subtype, current_balance")
-    .eq("user_id", context.userId)
-    .eq("plaid_item_id", item.plaid_item_id);
-  if (itemAccountsError) throw new Error(`Investment account lookup failed: request failed`);
-  if (!(itemAccounts ?? []).some((account) => isInvestmentAccount({ type: account.account_type, subtype: account.account_subtype }))) return;
-
-  let response;
-  try {
-    response = await context.plaidClient.investmentsHoldingsGet({ access_token: item.access_token });
-  } catch (error) {
-    if (investmentsUnavailable(error)) {
-      result.warnings.push("Investments are not available for this Item.");
-      return;
-    }
-    throw new Error(formattedPlaidError("investmentsHoldingsGet", error));
-  }
-
-  const securities = new Map((response.data.securities ?? []).map((security) => [security.security_id, security]));
-  const currentKeys = new Set<string>();
-  const securitiesByAccount = new Map<string, Array<{ tickerSymbol?: string | null; securityName?: string | null; currency?: string | null; value: number | string | null }>>();
-  for (const holding of response.data.holdings ?? []) {
-    if (!holding.account_id || !holding.security_id) continue;
-    const security = securities.get(holding.security_id);
-    const key = `${holding.account_id}:${holding.security_id}`;
-    currentKeys.add(key);
-    const accountAssets = securitiesByAccount.get(holding.account_id) ?? [];
-    accountAssets.push({
-      tickerSymbol: security?.ticker_symbol ?? null,
-      securityName: security?.name ?? null,
-      currency: security?.iso_currency_code ?? holding.iso_currency_code ?? null,
-      value: holding.institution_value ?? null,
-    });
-    securitiesByAccount.set(holding.account_id, accountAssets);
-    const holdingData = {
-      user_id: context.userId,
-      plaid_item_id: item.plaid_item_id,
-      plaid_account_id: holding.account_id,
-      security_id: holding.security_id,
-      ticker_symbol: security?.ticker_symbol ?? null,
-      security_name: security?.name ?? null,
-      quantity: holding.quantity ?? null,
-      institution_price: holding.institution_price ?? null,
-      institution_value: holding.institution_value ?? null,
-      cost_basis: holding.cost_basis ?? null,
-      currency: security?.iso_currency_code ?? holding.iso_currency_code ?? null,
-      iso_currency_code: security?.iso_currency_code ?? holding.iso_currency_code ?? null,
-      updated_at: new Date().toISOString(),
-    };
-    const { error } = await context.supabase.from("investment_holdings").upsert(
-      holdingData,
-      { onConflict: "user_id,plaid_account_id,security_id" },
-    );
-    if (error) throw new Error(`Holding persistence failed: request failed`);
-    result.holdings_updated += 1;
-  }
-
-  const { data: storedHoldings, error: storedError } = await context.supabase
-    .from("investment_holdings")
-    .select("id, plaid_account_id, security_id")
-    .eq("user_id", context.userId)
-    .eq("plaid_item_id", item.plaid_item_id);
-  if (storedError) throw new Error(`Stored holdings lookup failed: request failed`);
-  for (const storedHolding of storedHoldings ?? []) {
-    if (currentKeys.has(`${storedHolding.plaid_account_id}:${storedHolding.security_id}`)) continue;
-    const { error } = await context.supabase.from("investment_holdings").delete().eq("id", storedHolding.id).eq("user_id", context.userId);
-    if (error) throw new Error(`Stale holding removal failed: request failed`);
-    result.holdings_removed += 1;
-  }
-
-  if (isRobinhoodItem(item)) {
-    for (const account of itemAccounts ?? []) {
-      if (!account.plaid_account_id || !isInvestmentAccount({ type: account.account_type, subtype: account.account_subtype })) continue;
-      await persistDailyInvestmentSnapshot(
-        context,
-        item,
-        account.plaid_account_id,
-        typeof account.current_balance === "number" && Number.isFinite(account.current_balance) ? account.current_balance : null,
-        calculateSecuritiesOnlyValue(securitiesByAccount.get(account.plaid_account_id) ?? []),
-      );
-    }
-  }
-}
 
 async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Promise<ItemRefreshResult> {
   const result: ItemRefreshResult = {
@@ -476,8 +345,7 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
   }
   const steps = [refreshAccounts];
   if (item.products.includes("transactions")) steps.push(refreshTransactions);
-  if (item.products.includes("investments")) steps.push(refreshHoldings);
-  else result.warnings.push("Investments were not enabled for this connection.");
+  result.warnings.push("Holdings sync is separate. Use Sync holdings on the Investments page.");
   for (const step of steps) {
     try {
       await step(context, item, result);
@@ -485,7 +353,7 @@ async function refreshItem(context: PlaidRefreshContext, item: StoredItem): Prom
       result.status = "error";
       void error;
       result.errors.push("Refresh step failed. Check connection and product access.");
-      const stage = step === refreshAccounts ? "accounts" : step === refreshTransactions ? "transactions" : "investments";
+      const stage = step === refreshAccounts ? "accounts" : "transactions";
       (result.failed_stages ??= []).push(stage);
       console.warn("Plaid sync step failed", { stage, category: "sync_step_failed" });
     }

@@ -190,6 +190,11 @@ export default function PlaidConnect() {
     try {
       await exchangePlaidPublicToken(publicToken, session.current);
       savedConnection.current = true;
+      if (product === "investments") {
+        setStatus("Connection saved. Open Investments to verify permission and choose Sync holdings. No financial sync was started.");
+        router.refresh();
+        return;
+      }
       setStatus("Connection saved. Refreshing financial data...");
       try { await refreshAfterExchange(); }
       catch (error) {
@@ -203,7 +208,7 @@ export default function PlaidConnect() {
       setIsLoading(false);
       mutationInFlight.current = false;
     }
-  }, [refreshAfterExchange]);
+  }, [refreshAfterExchange, product, router]);
 
   const onExit = useCallback((linkError: { error_code: string } | null) => {
     if (exchanged.current) return;

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 const mocks = vi.hoisted(() => ({ position: vi.fn(), activity: vi.fn() }));
 vi.mock("./connectedPosition", () => ({ loadConnectedPosition: mocks.position }));
 vi.mock("./transactionData", () => ({ loadMonthlyActivity: mocks.activity }));
+vi.mock("./investmentHoldingState", async (original) => ({ ...await original<typeof import("./investmentHoldingState")>(), loadInvestmentHoldingState: async () => null }));
 import { compareReport, generateFinancialReport, reportMoney, type FinancialReport } from "./financialReport";
 
 const now = new Date("2026-11-12T15:00:00Z");
