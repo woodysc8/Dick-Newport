@@ -38,7 +38,7 @@ export async function transactionRoute(
     return json(
       {
         error:
-          "Transaction or weekly budget data is unavailable. Retry; if this persists, ask the administrator to verify the transactions/weekly budget migration.",
+          "Transaction data is unavailable. Retry; if this persists, ask the administrator to verify data access and schema readiness.",
       },
       503,
     );

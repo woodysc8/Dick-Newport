@@ -1,5 +1,7 @@
 # Read-only classification preview
 
+This historical interface is no longer mounted. The current spending interface is [monthly transaction history](monthly-transactions.md); saved categories and the existing correction APIs are preserved.
+
 The existing automatic classifier deliberately uses manual overrides, modern Plaid metadata and a narrow merchant rule; it never consumed legacy `category` text. Import writes legacy text separately and classifies from modern fields. The browser displays automatic classification, stored-category filters use `normalized_category`/overrides, the older weekly fallback uses stored categories, and the policy engine recalculates automatic classification. These representations can diverge. This pass exposes the differences without reclassifying financial records or changing budget inputs.
 
 `suggestTransactionClassification` extends that same module, reusing existing modern/manual classification and adding an explicit exact-path legacy table for previews. Manual overrides win, followed by high-confidence modern evidence, legacy paths, a narrow merchant rule, and insufficient evidence. No category is inferred by broad substring matching. All suggestions without an existing manual category override require explicit approval, including high-confidence suggestions.

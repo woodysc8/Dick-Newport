@@ -1,9 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAuthenticatedSupabaseContext } from "../../lib/supabase/server";
 import { Shell } from "../components/FinancePage";
-import TransactionsWorkspace from "../components/TransactionsWorkspace";
-import TransactionReview from "../components/TransactionReview";
-import SuggestedClassifications from "../components/SuggestedClassifications";
+import MonthlyTransactions from "../components/MonthlyTransactions";
 export default async function TransactionsPage({
   searchParams,
 }: {
@@ -14,7 +12,7 @@ export default async function TransactionsPage({
   for (const [key, value] of Object.entries(await searchParams))
     if (
       typeof value === "string" &&
-      ["q", "account", "category", "status", "start", "end", "page"].includes(
+      ["month", "account", "page"].includes(
         key,
       )
     )
@@ -23,11 +21,9 @@ export default async function TransactionsPage({
     <Shell
       active="Transactions"
       title="Transactions"
-      description="Review imported activity, correct categories, and understand weekly spending."
+      description="Monthly spending and your transaction history, newest first."
     >
-      <SuggestedClassifications />
-      <TransactionReview />
-      <TransactionsWorkspace
+      <MonthlyTransactions
         key={params.toString()}
         initialQuery={params.toString()}
       />

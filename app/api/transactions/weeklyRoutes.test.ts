@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   weekly: vi.fn(),
   policy: vi.fn(),
   suggestions: vi.fn(),
+  monthly: vi.fn(),
 }));
 vi.mock("../../../lib/supabase/server", () => ({
   getAuthenticatedSupabaseContext: mocks.auth,
@@ -18,6 +19,7 @@ vi.mock("../../../lib/transactionData", async (original) => ({
   listAccounts: mocks.accounts,
   loadWeeklyBudget: mocks.weekly,
   listTransactionSuggestions: mocks.suggestions,
+  loadMonthlyActivity: mocks.monthly,
 }));
 vi.mock("../../../lib/financialBudgetData", () => ({ loadBudgetPolicy: mocks.policy }));
 import { GET, PATCH } from "./route";
@@ -55,6 +57,21 @@ beforeEach(() => {
   mocks.weekly.mockResolvedValue({});
   mocks.policy.mockResolvedValue({ categories: [], accounts: [], monthly_limit: null });
   mocks.suggestions.mockResolvedValue({ suggestions: [], summary: { total: 0 }, page: 1, hasMore: false });
+  mocks.monthly.mockResolvedValue({ rows: [], totalTransactions: 0, page: 1, hasMore: false });
+});
+it("authenticates monthly history, uses only the verified owner, and does not load budget policy or write", async () => {
+  const req = () => new Request("http://localhost/api/transactions?view=monthly&month=2026-11&user_id=other");
+  mocks.auth.mockResolvedValueOnce(null);
+  expect((await GET(req())).status).toBe(401);
+  expect(mocks.monthly).not.toHaveBeenCalled();
+  const response = await GET(req());
+  expect(response.status).toBe(200);
+  expect(response.headers.get("Cache-Control")).toBe("no-store");
+  expect(mocks.monthly).toHaveBeenCalledWith(client, "owner", expect.any(URLSearchParams));
+  expect(mocks.policy).not.toHaveBeenCalled();
+  expect(mocks.profile).not.toHaveBeenCalled();
+  expect(chain.update).not.toHaveBeenCalled();
+  expect(chain.upsert).not.toHaveBeenCalled();
 });
 it("authenticates the suggestion preview and ignores forged owner identifiers without any writes", async () => {
   const req = () => new Request("http://localhost/api/transactions?view=suggestions&user_id=other");

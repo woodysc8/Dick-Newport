@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { budgetDecision, financialBudget, type BudgetPolicy } from "./budgetEngine";
 import { suggestTransactionClassification, suggestionConfidences, type SuggestionConfidence } from "./transactionClassification";
+import { calendarMonth, summarizeMonthlyActivity } from "./monthlyActivity";
 import {
   isBudgetCategory,
   weeklyMetrics,
@@ -18,9 +19,9 @@ export const uuid = (value: unknown): value is string =>
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 export class TransactionInputError extends Error {}
 export class TransactionAvailabilityError extends Error {
-  constructor(code: "SYNC_IN_PROGRESS" | "VOLUME_LIMIT") {
+  constructor(code: "SYNC_IN_PROGRESS" | "VOLUME_LIMIT" | "MONTHLY_VOLUME_LIMIT") {
     super(
-      code === "SYNC_IN_PROGRESS"
+      code === "MONTHLY_VOLUME_LIMIT" ? "Monthly activity exceeds the supported volume; no partial spending total is shown." : code === "SYNC_IN_PROGRESS"
         ? "Financial data is still being imported. Wait for refresh to finish, then retry weekly spending."
         : "Weekly budget data exceeds the supported volume. Ask the administrator to review the aggregation limit; no partial total is shown.",
     );
@@ -181,6 +182,58 @@ export async function listTransactionSuggestions(
   };
 }
 export type TransactionSuggestionsPage = Awaited<ReturnType<typeof listTransactionSuggestions>>;
+
+export async function loadMonthlyActivity(
+  client: SupabaseClient,
+  userId: string,
+  params: URLSearchParams,
+  now = new Date(),
+) {
+  const month = params.get("month") ?? weekPeriod(now).today.slice(0, 7);
+  let period: ReturnType<typeof calendarMonth>;
+  try { period = calendarMonth(month); }
+  catch { throw new TransactionInputError("Choose a valid calendar month (YYYY-MM)"); }
+  const page = Number(params.get("page") ?? 1), accountId = params.get("account");
+  if (!Number.isInteger(page) || page < 1 || page > 200 || (accountId && !uuid(accountId)))
+    throw new TransactionInputError("Invalid monthly activity filters");
+  const accounts = await listAccounts(client, userId);
+  if (accountId && !accounts.some((a) => a.id === accountId))
+    throw new TransactionInputError("Account unavailable for this user");
+  const transactions: BudgetTransaction[] = [];
+  let expectedCount: number | null = null;
+  for (let offset = 0; offset <= 10000; offset += 500) {
+    const { data, error, count } = await client.from("transactions")
+      .select(transactionColumns, { count: "exact" }).eq("user_id", userId)
+      .gte("date", period.start).lt("date", period.end)
+      .order("date", { ascending: false }).order("id", { ascending: false })
+      .range(offset, Math.min(offset + 499, 10000));
+    if (error || !Array.isArray(data) || count == null || (expectedCount != null && expectedCount !== count))
+      throw new Error("Monthly activity coverage unavailable or changed; retry");
+    if (count > 10000) throw new TransactionAvailabilityError("MONTHLY_VOLUME_LIMIT");
+    expectedCount = count;
+    transactions.push(...data as BudgetTransaction[]);
+    if (transactions.length === expectedCount || data.length < 500) break;
+  }
+  if (transactions.length !== expectedCount || new Set(transactions.map((t) => t.id)).size !== transactions.length)
+    throw new Error("Monthly activity coverage incomplete; retry");
+  // Posting can move into a later calendar month. Resolve saved provider links
+  // outside this month too, so a replaced pending record does not stay visible.
+  const pendingIds = [...new Set(transactions.filter((t) => t.pending === true && t.plaid_transaction_id).map((t) => t.plaid_transaction_id!))];
+  const replacements: Pick<BudgetTransaction, "account_id" | "pending_transaction_id">[] = [];
+  for (let offset = 0; offset < pendingIds.length; offset += 100) {
+    const { data, error, count } = await client.from("transactions")
+      .select("account_id, pending_transaction_id", { count: "exact" }).eq("user_id", userId)
+      .eq("pending", false).in("pending_transaction_id", pendingIds.slice(offset, offset + 100)).limit(501);
+    if (error || !Array.isArray(data) || count == null || data.length !== count)
+      throw new Error("Pending replacement coverage unavailable; retry");
+    if (count > 500) throw new TransactionAvailabilityError("MONTHLY_VOLUME_LIMIT");
+    replacements.push(...data);
+  }
+  const activity = summarizeMonthlyActivity(transactions, accounts, month, accountId, replacements);
+  const start = (page - 1) * 50;
+  return { ...activity, rows: activity.rows.slice(start, start + 50), page, hasMore: activity.rows.length > start + 50 };
+}
+export type MonthlyActivityPage = Awaited<ReturnType<typeof loadMonthlyActivity>>;
 
 export async function loadWeeklyBudget(
   client: SupabaseClient,

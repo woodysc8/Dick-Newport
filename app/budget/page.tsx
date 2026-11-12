@@ -1,2 +1,2 @@
-import FinancePage from "../components/FinancePage";
-export default function BudgetPage() { return <FinancePage section="Budget" />; }
+import { redirect } from "next/navigation";
+export default function BudgetPage() { redirect("/transactions"); }

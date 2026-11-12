@@ -3,6 +3,7 @@ import {
   listAccounts,
   listTransactions,
   listTransactionSuggestions,
+  loadMonthlyActivity,
   TransactionInputError,
   uuid,
 } from "../../../lib/transactionData";
@@ -12,6 +13,7 @@ import { loadBudgetPolicy } from "../../../lib/financialBudgetData";
 export function GET(request: Request) {
   return transactionRoute(request, async ({ supabase, user }) => {
     const params = new URL(request.url).searchParams;
+    if (params.get("view") === "monthly") return loadMonthlyActivity(supabase, user.id, params);
     if (params.get("view") === "suggestions") {
       const [accounts, policy] = await Promise.all([
         listAccounts(supabase, user.id), loadBudgetPolicy(supabase, user.id),
