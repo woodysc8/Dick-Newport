@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import FinancialProfileForm from "../../components/FinancialProfileForm";
 import PersonalPlaidCredentials from "../../components/PersonalPlaidCredentials";
+import FinancialBriefing from "../../components/FinancialBriefing";
 import { STARTER_FINANCIAL_PROFILE, type FinancialProfile } from "../../../lib/financialProfileDefaults";
 import { normalizeFinancialProfile } from "../../../lib/financialProfileNormalization";
 import { createSupabaseServerClient, ensureOwnProfile } from "../../../lib/supabase/server";
@@ -25,6 +26,7 @@ export default async function ProfileSettingsPage({ searchParams }: { searchPara
     <header className="my-7"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[var(--accent)]">Settings</p><h1 className="mt-2 text-4xl font-semibold tracking-[-0.05em]">Financial profile</h1><p className="mt-3 text-sm leading-6 text-[var(--text-muted)]">Update planning assumptions without changing connected account observations.</p></header>
     <section className="rounded-2xl border border-[var(--border)] bg-[var(--surface-strong)] p-4 shadow-[var(--shadow-soft)] sm:p-7"><FinancialProfileForm profile={profile} mode="settings" saved={query.saved === "1"} /></section>
     <PersonalPlaidCredentials />
+    <FinancialBriefing />
   </div></main>;
 }
 

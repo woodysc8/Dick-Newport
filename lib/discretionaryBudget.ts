@@ -19,6 +19,11 @@ export const categories = {
   tax: "Taxes",
   income: "Income",
   fixed: "Other fixed obligations",
+  gas: "Gas & fuel",
+  household: "Household supplies",
+  personal_care: "Personal care",
+  healthcare: "Healthcare",
+  subscriptions: "Subscriptions",
   needs_review: "Needs review",
 } as const;
 export type BudgetCategory = keyof typeof categories;
@@ -58,6 +63,7 @@ export type BudgetTransaction = {
   normalized_category: BudgetCategory;
   category_override: BudgetCategory | null;
   weekly_budget_override: "include" | "exclude" | null;
+  monthly_budget_override?: "include" | "exclude" | null;
   transaction_currency: string | null;
   pending_transaction_id: string | null;
   plaid_primary_category: string | null;
@@ -282,7 +288,8 @@ export function weeklyMetrics(
   }
   const posted = Math.max(0, gross - eligibleCredits) / 100;
   const previous = Math.max(0, previousGross - previousCredits) / 100;
-  const remaining = limit == null ? null : limit - posted;
+  const remaining = limit == null ? null : (Math.round(limit * 100) - Math.round(posted * 100)) / 100;
+  const provisional = accounts.length === 0 || reviewCount > 0 || currencyCount > 0 || [...sources.values()].some((s) => s === "review");
   return {
     ...period,
     limit,
@@ -291,6 +298,9 @@ export function weeklyMetrics(
     previous,
     change: posted - previous,
     remaining,
+    provisional,
+    safeRemaining: provisional ? null : remaining,
+    conservativeRemaining: remaining == null ? null : (Math.round(remaining * 100) - review - pending) / 100,
     percentage:
       limit == null
         ? null
@@ -302,7 +312,7 @@ export function weeklyMetrics(
     overBudget: remaining == null ? null : Math.max(0, -remaining),
     averageDaily: posted / period.daysElapsed,
     suggestedDaily:
-      remaining == null ? null : Math.max(0, remaining) / period.daysRemaining,
+      remaining == null || provisional ? null : Math.max(0, remaining - pending / 100) / period.daysRemaining,
     excluded: excluded / 100,
     review: review / 100,
     reviewCount,

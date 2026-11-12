@@ -5,6 +5,7 @@ import { CredentialConfigurationError } from "../../../../lib/plaidCredentialCon
 import { createPlaidRefreshContext, refreshFinancialData } from "../../../../lib/plaidRefresh";
 import { isSameOriginRequest } from "../../../../lib/requestSecurity";
 import { getAuthenticatedPlaidContext } from "../../../../lib/plaidTenant";
+import { FinancialJobError, withFinancialJob } from "../../../../lib/financialJobs";
 
 export async function POST(request: Request) {
   let stage = "origin_validation";
@@ -36,13 +37,21 @@ export async function POST(request: Request) {
     }
 
     stage = "lock_acquire";
-    const result = await withPlaidOperation(authenticatedContext, async () => {
+    const refresh = () => withPlaidOperation(authenticatedContext, async () => {
       stage = "credential_loading";
       const { client, credentialId } = await getUserPlaidClient(authenticatedContext);
       const refreshContext = createPlaidRefreshContext(authenticatedContext, client, credentialId);
       stage = "financial_sync";
       return refreshFinancialData(refreshContext);
     });
+    // Activate only after the additive job migration is approved. Existing
+    // installations keep their saved-Item refresh behavior until then.
+    const result = process.env.FINANCIAL_JOBS_ENABLED === "true"
+      ? await withFinancialJob(authenticatedContext.supabase, authenticatedContext.userId, "sync", `manual:${Math.floor(Date.now() / 900000)}`, async () => {
+        const value = await refresh();
+        if (!value.success || value.status !== "completed") throw new PlaidOperationError("Some connections could not be synchronized. Retry saved connections after reviewing their status.", 503);
+        return value;
+      }) : await refresh();
     return NextResponse.json({
       success: result.success,
       status: result.status,
@@ -63,7 +72,7 @@ export async function POST(request: Request) {
       })),
     }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    const known = error instanceof PlaidOperationError || error instanceof CredentialConfigurationError;
+    const known = error instanceof PlaidOperationError || error instanceof CredentialConfigurationError || error instanceof FinancialJobError;
     const category = error instanceof CredentialConfigurationError ? "configuration" : error instanceof PlaidOperationError ? "operation" : "unexpected";
     console.warn("Plaid refresh failed", { stage, category });
     return NextResponse.json({ error: known ? error.message : "Unable to refresh Plaid connections", stage, category },

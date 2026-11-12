@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   getAuthenticatedSupabaseContext: vi.fn(),
@@ -12,7 +12,8 @@ vi.mock("@supabase/supabase-js", () => ({
   createClient: mocks.createClient,
 }));
 
-import { getAuthenticatedPlaidContext, verifyPlaidItemOwnership } from "./plaidTenant";
+import { getAuthenticatedPlaidContext, getScheduledPlaidContext, isAuthenticatedPlaidContext, verifyPlaidItemOwnership } from "./plaidTenant";
+afterEach(() => vi.unstubAllEnvs());
 
 function ownershipClient(result: { data: unknown; error: { message: string } | null }) {
   const query = {
@@ -36,6 +37,20 @@ describe("Plaid tenant boundary", () => {
 
     await expect(getAuthenticatedPlaidContext(new Request("http://localhost"))).resolves.toBeNull();
     expect(mocks.createClient).not.toHaveBeenCalled();
+  });
+  it("requires an enabled schedule, exact secret and verified configured owner for delegation", async () => {
+    const owner = "00000000-0000-4000-8000-000000000001", secret = "fixture-scheduler-secret-at-least-32-characters";
+    vi.stubEnv("CRON_SECRET", secret); vi.stubEnv("SCHEDULED_FINANCE_OWNER_USER_ID", owner); vi.stubEnv("SCHEDULED_FINANCE_ENABLED", "false");
+    const request = new Request("https://fixture.invalid?user_id=other", { headers: { authorization: `Bearer ${secret}` } });
+    expect(await getScheduledPlaidContext(request)).toBeNull();
+    vi.stubEnv("SCHEDULED_FINANCE_ENABLED", "true");
+    expect(await getScheduledPlaidContext(new Request("https://fixture.invalid"))).toBeNull();
+    expect(mocks.createClient).not.toHaveBeenCalled();
+    const getUserById = vi.fn().mockResolvedValue({ data: { user: { id: owner } }, error: null }); mocks.createClient.mockReturnValue({ auth: { admin: { getUserById } } });
+    const context = await getScheduledPlaidContext(request);
+    expect(context?.userId).toBe(owner); expect(isAuthenticatedPlaidContext(context)).toBe(true); expect(getUserById).toHaveBeenCalledWith(owner);
+    getUserById.mockResolvedValue({ data: { user: { id: owner, banned_until: "2999-01-01" } }, error: null });
+    expect(await getScheduledPlaidContext(request)).toBeNull();
   });
 
   it("establishes context from the authenticated user and not request data", async () => {

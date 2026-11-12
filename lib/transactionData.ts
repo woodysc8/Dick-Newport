@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { financialBudget } from "./budgetEngine";
 import {
   isBudgetCategory,
   weeklyMetrics,
@@ -8,7 +9,7 @@ import {
 } from "./discretionaryBudget";
 
 export const transactionColumns =
-  "id, account_id, plaid_transaction_id, date, name, merchant_name, amount, pending, category, normalized_category, category_override, weekly_budget_override, transaction_currency, pending_transaction_id, plaid_primary_category, plaid_detailed_category, plaid_category_confidence";
+  "id, account_id, plaid_transaction_id, date, name, merchant_name, amount, pending, category, normalized_category, category_override, weekly_budget_override, monthly_budget_override, transaction_currency, pending_transaction_id, plaid_primary_category, plaid_detailed_category, plaid_category_confidence";
 export const accountColumns =
   "id, account_name, institution_name, currency, persistent_account_id, weekly_budget_source, created_at";
 export const uuid = (value: unknown): value is string =>
@@ -130,8 +131,18 @@ export async function loadWeeklyBudget(
   const limit = data.weekly_limit == null ? null : Number(data.weekly_limit);
   if (limit != null && (!Number.isFinite(limit) || limit < 0))
     throw new Error("Invalid budget limit");
+  const metrics = Array.isArray(data.category_rules) && Array.isArray(data.account_rules)
+    ? financialBudget(transactions, accounts, limit, { categories: data.category_rules, accounts: data.account_rules, monthly_limit: data.monthly_limit ?? null }, now).weekly
+    : weeklyMetrics(transactions, accounts, limit, now);
+  if (Array.isArray(data.jobs)) {
+    const last = data.jobs.find((job: { kind: string }) => job.kind === "sync")?.last_success_at;
+    if (!last || now.getTime() - Date.parse(last) > 86400000 || !Number.isFinite(Date.parse(last))) {
+      metrics.provisional = true; metrics.safeRemaining = null; metrics.suggestedDaily = null;
+    }
+  }
   return {
-    metrics: weeklyMetrics(transactions, accounts, limit, now),
+    metrics,
     accounts,
+    freshness: { lastSyncAt: Array.isArray(data.jobs) ? data.jobs.find((job: { kind: string }) => job.kind === "sync")?.last_success_at ?? null : null },
   };
 }

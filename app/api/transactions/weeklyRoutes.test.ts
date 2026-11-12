@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   accounts: vi.fn(),
   weekly: vi.fn(),
+  policy: vi.fn(),
 }));
 vi.mock("../../../lib/supabase/server", () => ({
   getAuthenticatedSupabaseContext: mocks.auth,
@@ -16,6 +17,7 @@ vi.mock("../../../lib/transactionData", async (original) => ({
   listAccounts: mocks.accounts,
   loadWeeklyBudget: mocks.weekly,
 }));
+vi.mock("../../../lib/financialBudgetData", () => ({ loadBudgetPolicy: mocks.policy }));
 import { GET, PATCH } from "./route";
 import {
   GET as weeklyGET,
@@ -49,6 +51,7 @@ beforeEach(() => {
   mocks.list.mockResolvedValue({ transactions: [], hasMore: false, page: 1 });
   mocks.accounts.mockResolvedValue([]);
   mocks.weekly.mockResolvedValue({});
+  mocks.policy.mockResolvedValue({ categories: [], accounts: [], monthly_limit: null });
 });
 it("authenticates every read and write without a service role", async () => {
   mocks.auth.mockResolvedValue(null);
@@ -117,6 +120,7 @@ it.each([
   { id, amount: 0 },
   { id, weekly_budget_override: "bad" },
   { id, weekly_budget_override: ["include"] },
+  { id, monthly_budget_override: ["include"] },
 ])("rejects provider fields and invalid overrides", async (body) =>
   expect((await PATCH(request("PATCH", body))).status).toBe(400),
 );

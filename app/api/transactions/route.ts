@@ -6,6 +6,7 @@ import {
   uuid,
 } from "../../../lib/transactionData";
 import { transactionRoute } from "../../../lib/transactionRoute";
+import { loadBudgetPolicy } from "../../../lib/financialBudgetData";
 
 export function GET(request: Request) {
   return transactionRoute(request, async ({ supabase, user }) => ({
@@ -15,6 +16,7 @@ export function GET(request: Request) {
       new URL(request.url).searchParams,
     )),
     accounts: await listAccounts(supabase, user.id),
+    policy: await loadBudgetPolicy(supabase, user.id),
   }));
 }
 export function PATCH(request: Request) {
@@ -22,10 +24,23 @@ export function PATCH(request: Request) {
     if (
       Object.keys(body).some(
         (k) =>
-          !["id", "category_override", "weekly_budget_override"].includes(k),
+          ![
+            "id",
+            "category_override",
+            "weekly_budget_override",
+            "monthly_budget_override",
+          ].includes(k),
       ) ||
       !uuid(body.id) ||
-      !("category_override" in body || "weekly_budget_override" in body) ||
+      !(
+        "category_override" in body ||
+        "weekly_budget_override" in body ||
+        "monthly_budget_override" in body
+      ) ||
+      ("monthly_budget_override" in body &&
+        body.monthly_budget_override !== null &&
+        (typeof body.monthly_budget_override !== "string" ||
+          !["include", "exclude"].includes(body.monthly_budget_override))) ||
       ("category_override" in body &&
         body.category_override !== null &&
         !isBudgetCategory(body.category_override)) ||

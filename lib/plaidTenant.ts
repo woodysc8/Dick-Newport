@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getAuthenticatedSupabaseContext } from "./supabase/server";
 import { CredentialConfigurationError } from "./plaidCredentialConfiguration";
+import { authorizedCron, financialServiceClient } from "./financialJobs";
 
 const plaidUserContextBrand = Symbol("PlaidUserContext");
 const authenticatedPlaidContexts = new WeakSet<object>();
@@ -28,6 +29,19 @@ export type PlaidContextCreationStage =
 
 export function isAuthenticatedPlaidContext(value: unknown): value is PlaidUserContext {
   return typeof value === "object" && value !== null && authenticatedPlaidContexts.has(value);
+}
+
+/** Delegation is available only after server-secret authentication AND explicit owner opt-in. */
+export async function getScheduledPlaidContext(request: Request): Promise<PlaidUserContext | null> {
+  if (!authorizedCron(request) || process.env.SCHEDULED_FINANCE_ENABLED !== "true") return null;
+  const userId = process.env.SCHEDULED_FINANCE_OWNER_USER_ID;
+  if (!userId || !/^[0-9a-f-]{36}$/i.test(userId)) return null;
+  const supabase = financialServiceClient();
+  const { data, error } = await supabase.auth.admin.getUserById(userId);
+  if (error || !data.user || data.user.id !== userId || (data.user.banned_until && Date.parse(data.user.banned_until) > Date.now())) return null;
+  const context = Object.freeze({ userId, supabase, [plaidUserContextBrand]: true as const });
+  authenticatedPlaidContexts.add(context);
+  return context;
 }
 
 /**
@@ -74,7 +88,7 @@ export async function verifyPlaidItemOwnership(
     .eq("plaid_item_id", plaidItemId)
     .maybeSingle();
 
-  if (error) return { item: null, error: new Error(`Plaid Item ownership lookup failed: ${error.message}`) };
+  if (error) return { item: null, error: new Error("Plaid Item ownership lookup failed") };
   if (!data) return { item: null, error: null };
   return {
     item: {

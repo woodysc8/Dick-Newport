@@ -14,6 +14,7 @@ vi.mock("../lib/supabase/server", () => ({
 }));
 vi.mock("./components/FinancialProfileForm", () => ({ default: () => "financial-profile-form" }));
 vi.mock("./components/PersonalPlaidCredentials", () => ({ default: () => "personal-plaid-credentials" }));
+vi.mock("./components/FinancialBriefing", () => ({ default: () => "private-financial-briefing" }));
 
 import OnboardingPage from "./onboarding/page";
 import ProfileSettingsPage from "./settings/profile/page";

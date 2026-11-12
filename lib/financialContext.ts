@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import accounting from "./accounting";
+import { loadFinancialBudget } from "./financialBudgetData";
 import {
   DashboardAccount,
   InvestmentHolding,
@@ -17,6 +18,7 @@ export type FinancialContextOptions = {
 type SourceStatus = "available" | "unavailable";
 
 export type FinancialContext = {
+  budget: { weekly: Awaited<ReturnType<typeof loadFinancialBudget>>["weekly"]; monthly: Awaited<ReturnType<typeof loadFinancialBudget>>["monthly"] } | null;
   generatedAt: string;
   netWorth: {
     total: number | null;
@@ -91,14 +93,6 @@ export type FinancialContext = {
   };
 };
 
-function currentMonthRange() {
-  const now = new Date();
-  return {
-    monthStart: new Date(now.getFullYear(), now.getMonth(), 1).toISOString().slice(0, 10),
-    monthEnd: new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().slice(0, 10),
-  };
-}
-
 function sourceStatus(error: unknown): SourceStatus {
   return error ? "unavailable" : "available";
 }
@@ -108,20 +102,12 @@ export async function getFinancialContext(
   userId: string,
   options: FinancialContextOptions = {}
 ): Promise<FinancialContext> {
-  const { monthStart, monthEnd } = currentMonthRange();
   const transactionLimit = Math.min(Math.max(options.transactionLimit ?? 50, 1), 200);
   const accountsQuery = supabase
     .from("accounts")
     .select("id, institution_name, account_name, mask, account_type, account_subtype, current_balance, available_balance, currency, plaid_account_id, plaid_item_id")
     .eq("user_id", userId)
     .order("created_at", { ascending: false });
-  const monthlyTransactionsQuery = supabase
-    .from("transactions")
-    .select("id, date, name, merchant_name, amount, category, pending, plaid_transaction_id, account_id")
-    .eq("user_id", userId)
-    .gte("date", monthStart)
-    .lte("date", monthEnd)
-    .order("date", { ascending: false });
   const recentTransactionsQuery = supabase
     .from("transactions")
     .select("id, date, name, merchant_name, amount, category, pending, plaid_transaction_id, account_id")
@@ -133,29 +119,24 @@ export async function getFinancialContext(
     .select("id, plaid_account_id, security_id, ticker_symbol, security_name, quantity, institution_price, institution_value, cost_basis, currency, iso_currency_code")
     .eq("user_id", userId)
     .order("institution_value", { ascending: false });
-  const [accountsResult, monthlyTransactionsResult, recentTransactionsResult, holdingsResult] = await Promise.all([
+  const [accountsResult, recentTransactionsResult, holdingsResult] = await Promise.all([
     accountsQuery,
-    monthlyTransactionsQuery,
     recentTransactionsQuery,
     holdingsQuery,
   ]);
 
-  if (accountsResult.error || monthlyTransactionsResult.error || recentTransactionsResult.error || holdingsResult.error) {
+  if (accountsResult.error || recentTransactionsResult.error || holdingsResult.error) {
     throw new Error("Failed to load financial context");
   }
 
   const accounts = (accountsResult.data ?? []) as DashboardAccount[];
-  const monthlyTransactions = (monthlyTransactionsResult.data ?? []) as RecentTransaction[];
   const recentTransactions = (recentTransactionsResult.data ?? []) as RecentTransaction[];
   const holdings = (holdingsResult.data ?? []) as InvestmentHolding[];
   const accountSummary = accounting.summarizeAccounts(accounts);
-  const monthly = accounting.computeMonthlyAccounting(monthlyTransactions, accounts);
   const accountAggregatesComplete = accountSummary.netWorth != null && accountSummary.currency != null && !accountSummary.mixedCurrency;
-  const categories = monthly.currencySafe
-    ? Object.fromEntries(monthly.spendingByCategory.map(({ category, total }) => [category, total]))
-    : {};
 
   const context: FinancialContext = {
+    budget: null,
     generatedAt: new Date().toISOString(),
     netWorth: {
       total: accountSummary.netWorth,
@@ -193,15 +174,15 @@ export async function getFinancialContext(
       })),
     },
     monthly: {
-      currency: monthly.currency,
-      currencySafe: monthly.currencySafe,
-      income: monthly.currencySafe ? monthly.income : null,
-      grossSpending: monthly.currencySafe ? monthly.grossSpending : null,
-      netPersonalSpending: monthly.currencySafe ? monthly.spending : null,
-      refunds: monthly.currencySafe ? monthly.refunds : null,
-      transfers: monthly.currencySafe ? monthly.transfers : null,
-      creditCardPayments: monthly.currencySafe ? monthly.creditCardPayments : null,
-      categories,
+      currency: null,
+      currencySafe: false,
+      income: null,
+      grossSpending: null,
+      netPersonalSpending: null,
+      refunds: null,
+      transfers: null,
+      creditCardPayments: null,
+      categories: {},
     },
     recentTransactions: recentTransactions.map((transaction) => ({
       id: transaction.id,
@@ -226,7 +207,7 @@ export async function getFinancialContext(
       lastRefreshAt: null,
       sourceStatuses: {
         accounts: sourceStatus(accountsResult.error),
-        monthlyTransactions: sourceStatus(monthlyTransactionsResult.error),
+        monthlyTransactions: "unavailable",
         recentTransactions: sourceStatus(recentTransactionsResult.error),
         investments: sourceStatus(holdingsResult.error),
         // plaid_items intentionally has no user-facing RLS policy.
@@ -259,5 +240,28 @@ export async function getFinancialContext(
     }
   }
 
+  // Canonical budgeting is shared with the dashboard and private export. A
+  // missing migration does not manufacture a competing monthly spending total.
+  try {
+    const budget = await loadFinancialBudget(supabase, userId);
+    context.budget = { weekly: budget.weekly, monthly: budget.monthly };
+    context.monthly.netPersonalSpending = budget.monthly.posted;
+    context.monthly.income = budget.monthly.income;
+    context.monthly.grossSpending = budget.monthly.grossSpending;
+    context.monthly.refunds = budget.monthly.eligibleCredits;
+    context.monthly.transfers = budget.monthly.transfers;
+    context.monthly.creditCardPayments = budget.monthly.cardPayments;
+    context.monthly.categories = budget.monthly.breakdown;
+    context.monthly.currency = "USD";
+    context.monthly.currencySafe = budget.monthly.currencyCount === 0;
+    context.freshness.lastRefreshAt = budget.snapshot.jobs.find((j) => j.kind === "sync")?.last_success_at ?? null;
+    context.freshness.sourceStatuses.budget = "available";
+    context.freshness.sourceStatuses.monthlyTransactions = "available";
+  } catch {
+    context.monthly.netPersonalSpending = null;
+    context.monthly.categories = {};
+    context.freshness.sourceStatuses.budget = "unavailable";
+    context.freshness.sourceStatuses.monthlyTransactions = "unavailable";
+  }
   return context;
 }

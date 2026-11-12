@@ -19,3 +19,11 @@ Verified human tasks / deployment gates:
 - After approved migration deployment, choose exactly one weekly budget source per underlying account, configure the limit, and authorize a saved-connection refresh only if imports are missing.
 
 Acceptance evidence: unit/API/UI tests and disposable RLS/migration tests; TypeScript, ESLint and production build; unauthenticated HTTP smoke checks. Final evidence and unresolved deployment gates are recorded in docs/transactions-weekly-budget.md and the delivery report. This plan does not claim live Plaid acceptance.
+
+## Budget engine / briefing release
+
+The user explicitly requested four daily saved-Item refresh attempts, subject to approval and platform/provider limits. This is an accepted scheduled polling design, not a hidden browser polling loop. All scheduling and Google write paths default disabled. Existing authentication and per-user encrypted Plaid credentials remain the authority; no new connector, verification product, global fallback or connection reset.
+
+Human tasks: pending additive migration approval (documented timestamp mismatches); actual Vercel project/plan verification; explicit owner delegation and cost/entitlement acceptance; Google dedicated-file authorization and private sharing; authorized live Sandbox/Production sync test; one approved private Doc publish; scheduler activation/monitoring. These tasks are deliberately unverified and reported as activation blockers, not marked completed. WEBHOOK-005: before expanding beyond the approved single-owner polling stopgap, review a verified, idempotent SYNC_UPDATES_AVAILABLE webhook design and migration plan. No webhook receiver is added or claimed tested in this release.
+
+New classification tests cover different synthetic personas, including $420 with $527.26 unreviewed (provisional, conservative −$107.26) and groceries included/rent excluded weekly with independent monthly obligations. Original provider fields/manual overrides and cursor semantics are preserved. The private briefing uses stored snapshots, never an LLM or a new paid Plaid refresh product. Final mocked/disposable test counts and HTTP smoke evidence appear in docs/financial-engine-validation.md; live CHECK-008 remains unfulfilled because live Plaid calls are prohibited during this task.

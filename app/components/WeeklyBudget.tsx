@@ -17,6 +17,7 @@ import {
 type WeeklyData = {
   metrics: ReturnType<typeof weeklyMetrics>;
   accounts: BudgetAccount[];
+  freshness?: { lastSyncAt: string | null };
 };
 const dollars = (value: number | null) =>
   value == null
@@ -182,6 +183,13 @@ export default function WeeklyBudget({
             {m.start} – {addDays(m.end, -1)} · Monday–Sunday · America/New_York
             · USD
           </p>
+          <p className="mt-2 text-sm">
+            Last recorded complete sync:{" "}
+            {data?.freshness?.lastSyncAt ??
+              "Not recorded; freshness is unverified"}
+            . Confirm source coverage and review warnings before relying on
+            totals.
+          </p>
           {(m.reviewCount > 0 || m.currencyCount > 0) && (
             <p className="mt-3 rounded border border-amber-300 p-3 text-sm">
               This is a subtotal of confirmed USD activity. Review omitted
@@ -197,7 +205,9 @@ export default function WeeklyBudget({
             <div>
               <p className="text-sm">Remaining allowance</p>
               <p className="mt-1 text-3xl font-semibold">
-                {dollars(m.remaining)}
+                {m.provisional || m.reviewCount > 0 || m.currencyCount > 0
+                  ? "Provisional — review required"
+                  : dollars(m.remaining)}
               </p>
             </div>
             <div>
@@ -205,6 +215,26 @@ export default function WeeklyBudget({
               <p className="mt-1 text-3xl font-semibold">{dollars(m.limit)}</p>
             </div>
           </div>
+          {(m.provisional || m.reviewCount > 0 || m.currencyCount > 0) && (
+            <p className="mt-3 text-sm" role="status">
+              Confirmed subtotal allowance: {dollars(m.remaining)}. After known
+              unreviewed debits and pending purchases:{" "}
+              {dollars(
+                m.conservativeRemaining ??
+                  (m.remaining == null
+                    ? null
+                    : m.remaining - m.review - m.pending),
+              )}
+              . This estimate is not a safe-to-spend amount; missing coverage or
+              currency data may change it.{" "}
+              <a
+                href="/transactions?category=needs_review"
+                className="underline"
+              >
+                Review transactions
+              </a>
+            </p>
+          )}
           {m.percentage != null && (
             <>
               <progress

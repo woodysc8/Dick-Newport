@@ -15,6 +15,7 @@ import { createSupabaseServerClient, ensureOwnProfile } from "../lib/supabase/se
 import PlaidConnect, { PlaidConnectShortcut } from "./components/PlaidConnect";
 import FinanceNav from "./components/FinanceNav";
 import WeeklyBudget from "./components/WeeklyBudget";
+import BudgetEngine from "./components/BudgetEngine";
 import TransactionsWorkspace from "./components/TransactionsWorkspace";
 
 export const dynamic = "force-dynamic";
@@ -331,6 +332,7 @@ export default async function Home() {
         </header>
         <div className="mt-5 overflow-x-auto"><FinanceNav active="Overview" /></div>
         <WeeklyBudget />
+        <BudgetEngine />
         <TransactionsWorkspace preview />
 
         {legacyExampleMode && <p className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Development example data is active.</p>}

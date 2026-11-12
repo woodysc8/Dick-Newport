@@ -2,7 +2,7 @@ import type { PlaidApi } from "plaid";
 import { decryptPlaidSecret } from "./plaidEncryption";
 import { calculateSecuritiesOnlyValue } from "./investmentSnapshots";
 import { isAuthenticatedPlaidContext, type PlaidUserContext } from "./plaidTenant";
-import { normalizePlaidCategory } from "./discretionaryBudget";
+import { classifyTransaction } from "./transactionClassification";
 import { collectTransactionSync } from "./transactionSyncBatch";
 
 const plaidRefreshContextBrand = Symbol("PlaidRefreshContext");
@@ -267,7 +267,7 @@ async function persistTransaction(
     plaid_primary_category: transaction.personal_finance_category?.primary ?? null,
     plaid_detailed_category: transaction.personal_finance_category?.detailed ?? null,
     plaid_category_confidence: transaction.personal_finance_category?.confidence_level ?? null,
-    normalized_category: normalizePlaidCategory(transaction.personal_finance_category?.primary, transaction.personal_finance_category?.detailed, transaction.personal_finance_category?.confidence_level),
+    normalized_category: classifyTransaction({ category_override: null, plaid_primary_category: transaction.personal_finance_category?.primary ?? null, plaid_detailed_category: transaction.personal_finance_category?.detailed ?? null, plaid_category_confidence: transaction.personal_finance_category?.confidence_level ?? null, merchant_name: transaction.merchant_name ?? null, name: transaction.name }).category,
     updated_at: new Date().toISOString(),
   };
   const { data: existing, error: lookupError } = await context.supabase

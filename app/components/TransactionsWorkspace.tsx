@@ -1,8 +1,9 @@
 "use client";
+import { classifyTransaction } from "../../lib/transactionClassification";
+import { budgetDecision, type BudgetPolicy } from "../../lib/budgetEngine";
 import { useEffect, useRef, useState } from "react";
 import {
   categories,
-  transactionDecision,
   type BudgetAccount,
   type BudgetCategory,
   type BudgetTransaction,
@@ -14,6 +15,7 @@ import {
 } from "../../lib/financeHttp";
 
 type TransactionPage = {
+  policy?: BudgetPolicy;
   transactions: BudgetTransaction[];
   accounts: BudgetAccount[];
   page: number;
@@ -91,7 +93,11 @@ export default function TransactionsWorkspace({
       setRevision((value) => value + 1);
     };
     window.addEventListener("financial-data-refreshed", update);
-    return () => window.removeEventListener("financial-data-refreshed", update);
+    window.addEventListener("transaction-preferences-updated", update);
+    return () => {
+      window.removeEventListener("financial-data-refreshed", update);
+      window.removeEventListener("transaction-preferences-updated", update);
+    };
   }, []);
   const rows = preview ? data?.transactions.slice(0, 6) : data?.transactions;
   const initial = new URLSearchParams(initialQuery);
@@ -270,7 +276,7 @@ export default function TransactionsWorkspace({
                       {transactionAmount(t, data.accounts)}
                     </td>
                     <td className="p-3">
-                      {categories[t.category_override ?? t.normalized_category]}
+                      {categories[classifyTransaction(t).category]}
                       {t.category_override && (
                         <small className="block">Manual override</small>
                       )}
@@ -307,7 +313,7 @@ export default function TransactionsWorkspace({
                     ?.account_name ?? "Account unavailable"}
                 </p>
                 <p className="mt-1 text-sm">
-                  {categories[t.category_override ?? t.normalized_category]}
+                  {categories[classifyTransaction(t).category]}
                   {t.category_override ? " · Manual override" : ""}
                 </p>
                 <button
@@ -345,6 +351,7 @@ export default function TransactionsWorkspace({
           key={selected.id}
           transaction={selected}
           accounts={data.accounts}
+          policy={data.policy}
           onClose={() => setSelected(null)}
           onSaved={() => {
             setSelected(null);
@@ -373,11 +380,13 @@ function Field({
 function TransactionDetail({
   transaction: t,
   accounts,
+  policy,
   onClose,
   onSaved,
 }: {
   transaction: BudgetTransaction;
   accounts: BudgetAccount[];
+  policy?: BudgetPolicy;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -387,17 +396,24 @@ function TransactionDetail({
     [inclusion, setInclusion] = useState<"include" | "exclude" | "">(
       t.weekly_budget_override ?? "",
     );
+  const [monthly, setMonthly] = useState<"include" | "exclude" | "">(
+    t.monthly_budget_override ?? "",
+  );
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null);
   const guard = useRef(false);
-  const decision = transactionDecision(
-    {
-      ...t,
-      category_override: category || null,
-      weekly_budget_override: inclusion || null,
-    },
-    accounts,
-  );
+  const decision = policy
+    ? budgetDecision(
+        {
+          ...t,
+          category_override: category || null,
+          weekly_budget_override: inclusion || null,
+        },
+        accounts,
+        policy,
+        "weekly",
+      )
+    : null;
   return (
     <aside
       role="region"
@@ -436,12 +452,21 @@ function TransactionDetail({
         </div>
         <div>
           <dt>Automatic normalized category</dt>
-          <dd>{categories[t.normalized_category]}</dd>
+          <dd>
+            {
+              categories[
+                classifyTransaction({ ...t, category_override: null }).category
+              ]
+            }{" "}
+            · {classifyTransaction(t).source}: {classifyTransaction(t).reason}
+          </dd>
         </div>
         <div>
           <dt>Weekly decision</dt>
           <dd>
-            {decision.kind}: {decision.reason}
+            {decision
+              ? `${decision.kind}: ${decision.reason}`
+              : "Budget policy unavailable; check Budget before relying on inclusion."}
           </dd>
         </div>
       </dl>
@@ -460,6 +485,9 @@ function TransactionDetail({
                 id: t.id,
                 category_override: category || null,
                 weekly_budget_override: inclusion || null,
+                ...(monthly !== (t.monthly_budget_override ?? "")
+                  ? { monthly_budget_override: monthly || null }
+                  : {}),
               }),
             );
             onSaved();
@@ -498,6 +526,17 @@ function TransactionDetail({
             <option value="">Use category rules</option>
             <option value="include">Count toward weekly budget</option>
             <option value="exclude">Exclude from weekly budget</option>
+          </select>
+        </Field>
+        <Field label="Monthly budget inclusion">
+          <select
+            disabled={busy}
+            value={monthly}
+            onChange={(e) => setMonthly(e.target.value as typeof monthly)}
+          >
+            <option value="">Use category/account rules</option>
+            <option value="include">Count toward monthly spending</option>
+            <option value="exclude">Exclude from monthly spending</option>
           </select>
         </Field>
         <button
